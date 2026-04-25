@@ -104,28 +104,31 @@ class UserController extends Controller
 
     public function registerBuyer(BuyerRegisterRequest $request)
     {
-        // 1. جلب البيانات التي تم التحقق منها
+        // 1. جلب البيانات
         $validated = $request->validated();
 
-        // 2. معالجة رفع الصورة (إذا كانت موجودة)
+        // 2. معالجة صورة الملف الشخصي
         if ($request->hasFile('profile_photo')) {
             $validated['profile_photo'] = $request->file('profile_photo')->store('buyers/profiles', 'public');
         }
 
-        // 3. تشفير كلمة السر وتحديد الرتبة
+        // 3. إضافة معالجة صورة الهوية (السطر المطلوب)
+        if ($request->hasFile('id_card_photo')) {
+            $validated['id_card_photo'] = $request->file('id_card_photo')->store('buyers/ids', 'public');
+        }
+
+        // 4. تشفير البيانات الأساسية
         $validated['password'] = Hash::make($request->password);
         $validated['role'] = 'buyer';
 
-        // 4. إنشاء المستخدم دفعة واحدة
+        // 5. إنشاء المستخدم
         $user = User::create($validated);
 
-        // 5. الرد
         return response()->json([
             'message' => 'Registration successful. Your account is pending admin approval. Please verify your phone via OTP..',
             'user' => $user
         ], 201);
     }
-
     public function registerVendor(VendorRegisterRequest $request)
     {
         // 1. جلب البيانات المفحوصة
@@ -155,27 +158,24 @@ class UserController extends Controller
 
     public function registerWholesale(WholesaleRegisterRequest $request)
     {
-        // 1. جلب البيانات التي تم التحقق منها فقط
         $validated = $request->validated();
 
-        // 2. معالجة صورة الملف الشخصي (إذا وجدت)
+        // صورة الملف الشخصي
         if ($request->hasFile('profile_photo')) {
             $validated['profile_photo'] = $request->file('profile_photo')->store('wholesale/profiles', 'public');
         }
 
-        // 3. معالجة صورة السجل التجاري (إجبارية حسب الـ Request)
+        // صورة السجل التجاري
         $validated['commercial_record_photo'] = $request->file('commercial_record_photo')->store('wholesale/records', 'public');
 
-        // 4. تشفير كلمة السر والـ PIN يدوياً قبل الحفظ
+        // صورة الهوية الشخصية (السطر المطلوب)
+        $validated['id_card_photo'] = $request->file('id_card_photo')->store('wholesale/ids', 'public');
+
+        // التشفير والحقول الثابتة
         $validated['password'] = Hash::make($request->password);
         $validated['wallet_pin'] = Hash::make($request->wallet_pin);
-
-        // 5. إضافة الحقول الثابتة
         $validated['role'] = 'wholesale';
-        // إذا كنتِ تريدين تفعيل نظام الموافقة كما في المثال الذي أرسلتِه:
-        // $validated['status'] = 'pending'; 
 
-        // 6. إنشاء المستخدم دفعة واحدة باستخدام المصفوفة المعدلة
         $user = User::create($validated);
 
         return response()->json([
@@ -183,5 +183,4 @@ class UserController extends Controller
             'user' => $user
         ], 201);
     }
-
 }

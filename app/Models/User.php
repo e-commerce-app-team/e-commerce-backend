@@ -30,6 +30,7 @@ class User extends Authenticatable
         'phone',
         'password',
         'profile_photo',
+        'id_card_photo',
         'commercial_record_photo',
         'company_name',
         'commercial_registration_number',

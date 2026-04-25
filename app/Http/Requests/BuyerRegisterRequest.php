@@ -50,6 +50,12 @@ class BuyerRegisterRequest extends FormRequest
                 'mimes:png,jpg,jpeg,gif,webp',
                 'max:2048',
             ],
+            'id_card_photo' => [
+                'nullable',
+                'image',
+                'mimes:png,jpg,jpeg,gif,webp',
+                'max:2048',
+            ],
 
 
         ];
