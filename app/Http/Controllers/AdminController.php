@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\PayoutRequest;
 use App\Models\User;
 use Illuminate\Http\Request;
 
@@ -80,6 +81,49 @@ class AdminController extends Controller
     {
         $users = User::where('status', 'blocked')->latest()->get();
         return response()->json($users);
+    }
+
+    public function processPayout(Request $request, $id, $action)
+    {
+        // البحث عن طلب السحب باستخدام المعرف (ID) وإذا لم يوجد يتم إرجاع خطأ 404 تلقائياً
+        $payout = PayoutRequest::findOrFail($id);
+
+        // التأكد أن حالة الطلب لا تزال "قيد الانتظار" (pending) لمنع معالجة نفس الطلب مرتين
+        if ($payout->status !== 'pending') {
+            return response()->json(['message' => 'This request has already been processed.'], 400);
+        }
+
+        // في حال قرر الأدمن الموافقة على الطلب (إتمام العملية)
+        if ($action === 'complete') {
+            // تحديث حالة الطلب إلى "مكتمل" وإضافة ملاحظات الأدمن أو نص افتراضي
+            $payout->update([
+                'status' => 'completed',
+                'admin_notes' => $request->admin_notes ?? 'Transfer completed successfully.'
+            ]);
+
+            return response()->json(['message' => 'Payout confirmed and closed successfully.']);
+        }
+
+        // في حال قرر الأدمن رفض طلب السحب
+        elseif ($action === 'reject') {
+            // تحديث حالة الطلب إلى "مرفوض" مع ذكر السبب في الملاحظات
+            $payout->update([
+                'status' => 'rejected',
+                'admin_notes' => $request->admin_notes ?? 'Request rejected by administration.'
+            ]);
+
+            // جلب بيانات المستخدم (البائع) صاحب هذا الطلب
+            $user = $payout->user;
+
+            // إعادة المبلغ المقتطع إلى رصيد البائع (لأننا خصمنا المبلغ منه عند إرسال الطلب)
+            $user->balance += $payout->amount;
+            $user->save();
+
+            return response()->json(['message' => 'Request rejected and amount refunded to vendor balance.']);
+        }
+
+        // إرجاع خطأ في حال كان الإجراء (action) المرسل غير معروف (ليس complete أو reject)
+        return response()->json(['message' => 'Invalid action. Must be "complete" or "reject".'], 400);
     }
 
 }

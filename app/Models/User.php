@@ -68,4 +68,27 @@ class User extends Authenticatable
     {
         return $this->role === 'buyer';
     }
+
+    // داخل كلاس User
+    public function payoutRequests()
+    {
+        return $this->hasMany(PayoutRequest::class);
+    }
+
+    // لجلب كل الحركات المالية الخاصة بهذا المستخدم
+    public function transactions()
+    {
+        return $this->hasMany(Transaction::class);
+    }
+
+    public function vendorOrders()
+    {
+        return $this->hasMany(Order::class, 'vendor_id');
+    }
+
+    // 2. علاقة المشتري مع الطلبات التي قام بشرائها
+    public function buyerOrders()
+    {
+        return $this->hasMany(Order::class, 'user_id');
+    }
 }

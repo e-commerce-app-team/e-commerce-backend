@@ -23,4 +23,5 @@ class AdminSeeder extends Seeder
             'profile_photo' => null // مسار افتراضي للصورة
         ]);
     }
+
 }

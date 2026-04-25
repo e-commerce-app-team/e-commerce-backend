@@ -2,6 +2,9 @@
 
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\OrderController;
+use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\PayoutController;
 use App\Http\Controllers\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -28,3 +31,16 @@ Route::get('pending', [AdminController::class, 'pendingUsers'])->middleware('aut
 Route::get('approved', [AdminController::class, 'approvedUsers'])->middleware('auth:sanctum');// جلب المقبولين
 Route::get('rejected', [AdminController::class, 'rejectedUsers'])->middleware('auth:sanctum'); // جلب المرفوضين
 Route::get('blocked', [AdminController::class, 'blockedUsers'])->middleware('auth:sanctum');  // جلب المحظورين
+Route::post('admin/payouts/process/{id}/{action}', [AdminController::class, 'processPayout'])->middleware('auth:sanctum');
+
+Route::get('balance', [PayoutController::class, 'getBalance'])->middleware('auth:sanctum');       // رؤية الرصيد
+Route::post('request', [PayoutController::class, 'requestWithdraw'])->middleware('auth:sanctum');// طلب سحب جديد
+Route::get('history', [PayoutController::class, 'payoutHistory'])->middleware('auth:sanctum');   // تاريخ السحوبات
+
+Route::get('buyerBalance', [PaymentController::class, 'getWalletBalance'])->middleware('auth:sanctum');
+Route::post('deposit', [PaymentController::class, 'deposit'])->middleware('auth:sanctum');
+Route::post('orders/{orderId}/pay', [PaymentController::class, 'payWithWallet'])->middleware('auth:sanctum');
+Route::get('buyerHistory', [PaymentController::class, 'getTransactionHistory'])->middleware('auth:sanctum');
+
+Route::post('orders/{id}/mark-delivered', [OrderController::class, 'markAsDelivered'])->middleware('auth:sanctum');
+Route::post('storeOrders', [OrderController::class, 'store'])->middleware('auth:sanctum')->middleware('auth:sanctum');
