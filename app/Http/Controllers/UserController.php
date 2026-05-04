@@ -172,7 +172,6 @@ class UserController extends Controller
         $user = User::create($validated);
 
         $user->load('categoryRel');
-
         return response()->json([
             'success' => true,
             'message' => 'Registration successful. Your seller account is pending admin approval.',
@@ -184,11 +183,19 @@ class UserController extends Controller
                 'phone' => $user->phone,
                 'role' => $user->role,
                 'store_name' => $user->store_name,
-                // هنا نضع الاسم بدلاً من الرقم
                 'category' => $user->categoryRel ? $user->categoryRel->name : 'N/A',
                 'status' => $user->status,
+
+                // --- الحقول الإضافية التي طلبتها ---
+                'commercial_registration_number' => $user->commercial_registration_number,
+                // نستخدم Storage::url للحصول على الرابط الكامل للصورة بدلاً من المسار الداخلي فقط
+                'commercial_record_photo' => $user->commercial_record_photo ? asset('storage/' . $user->commercial_record_photo) : null,
+                'tax_number' => $user->tax_number,
+                // ----------------------------------
+
                 'created_at' => $user->created_at,
             ]
         ], 201);
     }
+
 }
