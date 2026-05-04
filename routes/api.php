@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
@@ -14,9 +15,8 @@ Route::get('/user', function (Request $request) {
 })->middleware('auth:sanctum');
 
 Route::Post('login', [UserController::class, 'login']);
-Route::post('registerBuyer', [UserController::class, 'registerBuyer']);
-Route::post('registerVendor', [UserController::class, 'registerVendor']);
-Route::post('registerWholesale', [UserController::class, 'registerWholesale']);
+Route::post('register/buyer', [UserController::class, 'registerBuyer']);
+Route::post('register/seller', [UserController::class, 'registerSeller']);
 Route::post('logout', [UserController::class, 'logout'])->middleware('auth:sanctum');
 
 Route::post('admin/login', [AdminAuthController::class, 'login']);
@@ -44,3 +44,5 @@ Route::get('buyerHistory', [PaymentController::class, 'getTransactionHistory'])-
 
 Route::post('orders/{id}/mark-delivered', [OrderController::class, 'markAsDelivered'])->middleware('auth:sanctum');
 Route::post('storeOrders', [OrderController::class, 'store'])->middleware('auth:sanctum')->middleware('auth:sanctum');
+
+Route::get('categories', [CategoryController::class, 'getAllCategories'])->middleware('auth:sanctum');

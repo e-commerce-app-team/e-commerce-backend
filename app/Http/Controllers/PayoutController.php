@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\PayoutRequest;
 use Hash;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;   // هذا السطر يحل مشكلة الـ DB
+use App\Models\User;                 // تأكد من وجوده عشان الـ User::where
 
 class PayoutController extends Controller
 {
@@ -30,46 +32,53 @@ class PayoutController extends Controller
     {
         $user = auth()->user();
 
-        // 1. التأكد أن المستخدم بائع أو تاجر جملة
-        if ($user->role !== 'vendor' && $user->role !== 'wholesale') {
+        // 1. التأكد أن المستخدم بائع أو تاجر جملة (استخدام الـ Helpers التي أضفناها في الموديل)
+        if (!$user->isVendor() && !$user->isWholesale()) {
             return response()->json(['message' => 'Unauthorized. Only sellers can request payouts.'], 403);
         }
 
-        // 2. التحقق من البيانات المدخلة (استخدام كلمة المرور بدل PIN)
+        // 2. التحقق من البيانات المدخلة
         $request->validate([
             'amount' => 'required|numeric|min:50',
-            'wallet_pin' => 'required'
+            'password' => 'required' // تغيير wallet_pin إلى password
         ]);
 
         // 3. التحقق من كلمة المرور للأمان
-        if (!Hash::check($request->wallet_pin, $user->wallet_pin)) {
-            return response()->json(['message' => 'Incorrect wallet_pin.'], 403);
+        if (!Hash::check($request->password, $user->password)) {
+            return response()->json(['message' => 'Incorrect password.'], 403);
         }
 
-        // 4. التأكد من توفر الرصيد الكافي للسحب
-        if ($user->balance < $request->amount) {
-            return response()->json(['message' => 'Insufficient balance to complete this transaction.'], 400);
-        }
+        // 4. استخدام Transaction لضمان سلامة خصم الرصيد
+        return DB::transaction(function () use ($user, $request) {
 
-        // 5. إنشاء سجل طلب السحب (هنا جوهر شرط موافقة الأدمن)
-        // الحالة الافتراضية 'pending' تعني أن المال لن يخرج فعلياً إلا بقرار من الأدمن
-        $payout = PayoutRequest::create([
-            'user_id' => $user->id,
-            'amount' => $request->amount,
-            'payout_method' => $user->payout_method,
-            'payout_account' => $user->payout_account,
-            'status' => 'pending' // الطلب يبقى معلقاً هنا
-        ]);
+            // إعادة جلب بيانات المستخدم مع قفل السجل (Lock for update) لمنع السحب المزدوج
+            $currentUser = User::where('id', $user->id)->lockForUpdate()->first();
 
-        // 6. خصم المبلغ من رصيد المستخدم (عملية تجميد الرصيد)
-        // هذا يمنع البائع من طلب سحب نفس المبلغ مرتين قبل موافقة الأدمن
-        $user->balance -= $request->amount;
-        $user->save();
+            // 5. التأكد من توفر الرصيد الكافي
+            if ($currentUser->balance < $request->amount) {
+                return response()->json(['message' => 'Insufficient balance to complete this transaction.'], 400);
+            }
 
-        return response()->json([
-            'message' => 'Your withdrawal request has been submitted and is awaiting Admin approval.',
-            'payout_details' => $payout
-        ]);
+            // 6. إنشاء سجل طلب السحب
+            $payout = PayoutRequest::create([
+                'user_id' => $currentUser->id,
+                'amount' => $request->amount,
+                // تأكد أن هذه الحقول موجودة في جدول المستخدمين أو يتم إرسالها في الطلب
+                'payout_method' => $currentUser->payout_method ?? 'Not specified',
+                'payout_account' => $currentUser->payout_account ?? 'Not specified',
+                'status' => 'pending'
+            ]);
+
+            // 7. خصم المبلغ من رصيد المستخدم (تجميد الرصيد)
+            $currentUser->decrement('balance', $request->amount);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Your withdrawal request has been submitted and is awaiting Admin approval.',
+                'new_balance' => $currentUser->balance,
+                'payout_details' => $payout
+            ]);
+        });
     }
     // 3. مراجعة تاريخ السحوبات للبائع فقط
     public function payoutHistory()

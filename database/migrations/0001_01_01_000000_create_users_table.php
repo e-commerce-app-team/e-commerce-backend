@@ -5,36 +5,35 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-
         Schema::create('users', function (Blueprint $table) {
             $table->id();
+            // معلومات أساسية (مشتركة للجميع)
             $table->string('first_name');
             $table->string('last_name');
             $table->string('email')->unique();
             $table->string('phone')->unique();
             $table->string('password');
-
-            // Photos
             $table->string('profile_photo')->nullable();
-            $table->string('id_card_photo')->nullable(); // خاص بالـ Vendor
-            $table->string('commercial_record_photo')->nullable(); // خاص بالـ Wholesale
 
-            // Business Info
-            $table->string('display_name')->nullable(); // Vendor
-            $table->string('company_name')->nullable(); // Wholesale
-            $table->string('commercial_registration_number')->unique()->nullable(); // السجل التجاري
-            $table->string('category')->nullable(); // أضيفي nullable() هنا            $table->integer('min_order_quantity')->nullable(); // الحد الأدنى للطلب
-            $table->text('warehouse_address')->nullable(); // عنوان المستودع
-            $table->integer('min_order_quantity')->nullable(); // تأكدي من وجود هذا السطر
+            // صور التحقق (حسب النوع)
+            $table->string('id_card_photo')->nullable(); // للكل (حسب طلبك الأخير)
+            $table->string('commercial_record_photo')->nullable(); // فقط للـ Wholesale
+            $table->string('store_logo')->nullable(); // اختياري للبائعين
 
+            // معلومات المتجر والأعمال
+            $table->string('store_name')->nullable(); // اسم المتجر (للبائعين)
+            $table->string('category')->nullable(); // التصنيف (للبائعين)
+            $table->string('commercial_registration_number')->unique()->nullable(); // السجل (Wholesale)
+            $table->string('tax_number')->nullable(); // الرقم الضريبي (Wholesale - اختياري)
+
+
+            // الإعدادات والحالة
             $table->enum('role', ['buyer', 'vendor', 'wholesale'])->default('buyer');
             $table->enum('status', ['pending', 'approved', 'rejected', 'blocked'])->default('pending');
-            // Wallet Info
+
+            // المحفظة والمالية
             $table->decimal('balance', 10, 2)->default(0);
             $table->string('payout_method')->nullable();
             $table->string('payout_account')->nullable();
@@ -55,13 +54,9 @@ return new class extends Migration {
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('users');
-        Schema::dropIfExists('password_reset_tokens');
         Schema::dropIfExists('sessions');
     }
 };

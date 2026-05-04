@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\BuyerRegisterRequest;
+use App\Http\Requests\SellerRegisterRequest;
 use App\Http\Requests\VendorRegisterRequest;
 use App\Http\Requests\WholesaleRegisterRequest;
 use App\Models\User;
@@ -104,83 +105,90 @@ class UserController extends Controller
 
     public function registerBuyer(BuyerRegisterRequest $request)
     {
-        // 1. جلب البيانات
+        // 1. جلب البيانات المفحوصة
         $validated = $request->validated();
 
-        // 2. معالجة صورة الملف الشخصي
+        // 2. معالجة صورة الملف الشخصي (اختيارية)
         if ($request->hasFile('profile_photo')) {
             $validated['profile_photo'] = $request->file('profile_photo')->store('buyers/profiles', 'public');
         }
 
-        // 3. إضافة معالجة صورة الهوية (السطر المطلوب)
+        // 3. معالجة صورة الهوية (اختيارية)
         if ($request->hasFile('id_card_photo')) {
             $validated['id_card_photo'] = $request->file('id_card_photo')->store('buyers/ids', 'public');
         }
 
-        // 4. تشفير البيانات الأساسية
+        // 4. تشفير كلمة المرور وتحديد الرتبة والحالة
         $validated['password'] = Hash::make($request->password);
         $validated['role'] = 'buyer';
+
+        // الحالة 'approved' لكي يتمكن من تسجيل الدخول فوراً
+        $validated['status'] = 'approved';
 
         // 5. إنشاء المستخدم
         $user = User::create($validated);
 
+        // 6. إرجاع الرد بدون توكن
         return response()->json([
-            'message' => 'Registration successful. Your account is pending admin approval. Please verify your phone via OTP..',
-            'user' => $user
-        ], 201);
-    }
-    public function registerVendor(VendorRegisterRequest $request)
-    {
-        // 1. جلب البيانات المفحوصة
-        $validated = $request->validated();
-
-        // 2. معالجة الصور
-        if ($request->hasFile('profile_photo')) {
-            $validated['profile_photo'] = $request->file('profile_photo')->store('vendors/profiles', 'public');
-        }
-
-        // صورة الهوية إجبارية للبائع
-        $validated['id_card_photo'] = $request->file('id_card_photo')->store('vendors/ids', 'public');
-
-        // 3. التشفير والحقول الإضافية
-        $validated['password'] = Hash::make($request->password);
-        $validated['wallet_pin'] = Hash::make($request->wallet_pin);
-        $validated['role'] = 'vendor';
-
-        // 4. الحفظ في قاعدة البيانات
-        $user = User::create($validated);
-
-        return response()->json([
-            'message' => 'Registration successful. Your account is pending admin approval. Please verify your phone via OTP..',
+            'success' => true,
+            'message' => 'Buyer registered successfully. Please log in.',
             'user' => $user
         ], 201);
     }
 
-    public function registerWholesale(WholesaleRegisterRequest $request)
+    public function registerSeller(SellerRegisterRequest $request)
     {
+        // 1. جلب البيانات التي تم التحقق منها
         $validated = $request->validated();
 
-        // صورة الملف الشخصي
-        if ($request->hasFile('profile_photo')) {
-            $validated['profile_photo'] = $request->file('profile_photo')->store('wholesale/profiles', 'public');
+        // 2. تصفية البيانات بناءً على الرتبة (Role)
+        // إذا كان البائع عادي (vendor)، نقوم بحذف بيانات الجملة من مصفوفة الـ validated
+        if ($request->role === 'vendor') {
+            unset($validated['commercial_record_photo']);
+            unset($validated['tax_number']); // تأكد من حذف الرقم الضريبي أيضاً
         }
 
-        // صورة السجل التجاري
-        $validated['commercial_record_photo'] = $request->file('commercial_record_photo')->store('wholesale/records', 'public');
+        // 3. معالجة الصور (رفع الصور العامة)
+        if ($request->hasFile('profile_photo')) {
+            $validated['profile_photo'] = $request->file('profile_photo')->store('sellers/profiles', 'public');
+        }
+        if ($request->hasFile('store_logo')) {
+            $validated['store_logo'] = $request->file('store_logo')->store('sellers/logos', 'public');
+        }
 
-        // صورة الهوية الشخصية (السطر المطلوب)
-        $validated['id_card_photo'] = $request->file('id_card_photo')->store('wholesale/ids', 'public');
+        // الهوية إجبارية للبائع
+        $validated['id_card_photo'] = $request->file('id_card_photo')->store('sellers/ids', 'public');
 
-        // التشفير والحقول الثابتة
+        // 4. معالجة السجل التجاري فقط لبائع الجملة
+        if ($request->role === 'wholesale' && $request->hasFile('commercial_record_photo')) {
+            $validated['commercial_record_photo'] = $request->file('commercial_record_photo')->store('sellers/records', 'public');
+        }
+
+        // 5. التشفير والحالة
         $validated['password'] = Hash::make($request->password);
-        $validated['wallet_pin'] = Hash::make($request->wallet_pin);
-        $validated['role'] = 'wholesale';
+        $validated['status'] = 'pending';
 
+        // 6. الحفظ
         $user = User::create($validated);
 
+        $user->load('categoryRel');
+
         return response()->json([
-            'message' => 'Registration successful. Your account is pending admin approval. Please verify your phone via OTP..',
-            'user' => $user
+            'success' => true,
+            'message' => 'Registration successful. Your seller account is pending admin approval.',
+            'user' => [
+                'id' => $user->id,
+                'first_name' => $user->first_name,
+                'last_name' => $user->last_name,
+                'email' => $user->email,
+                'phone' => $user->phone,
+                'role' => $user->role,
+                'store_name' => $user->store_name,
+                // هنا نضع الاسم بدلاً من الرقم
+                'category' => $user->categoryRel ? $user->categoryRel->name : 'N/A',
+                'status' => $user->status,
+                'created_at' => $user->created_at,
+            ]
         ], 201);
     }
 }

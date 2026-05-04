@@ -2,27 +2,15 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
-use Database\Factories\UserFactory;
-use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password'])]
-#[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
-    /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
     protected $fillable = [
         'first_name',
         'last_name',
@@ -32,16 +20,23 @@ class User extends Authenticatable
         'profile_photo',
         'id_card_photo',
         'commercial_record_photo',
-        'company_name',
+        'store_logo',
+        'store_name',
         'commercial_registration_number',
+        'tax_number',
         'category',
-        'min_order_quantity',
-        'warehouse_address',
         'status',
         'role',
+        'balance',
         'payout_method',
         'payout_account',
         'wallet_pin'
+    ];
+
+    protected $hidden = [
+        'password',
+        'remember_token',
+        'wallet_pin',
     ];
 
     protected function casts(): array
@@ -49,46 +44,49 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
-            'wallet_pin' => 'hashed'
+            'wallet_pin' => 'hashed',
+            'balance' => 'decimal:2'
         ];
     }
 
-
+    // الـ Helper Methods للتحقق من الصلاحيات
     public function isVendor()
     {
         return $this->role === 'vendor';
     }
-
     public function isWholesale()
     {
         return $this->role === 'wholesale';
     }
-
     public function isBuyer()
     {
         return $this->role === 'buyer';
     }
 
-    // داخل كلاس User
+    // العلاقات (Relationships)
     public function payoutRequests()
     {
         return $this->hasMany(PayoutRequest::class);
     }
-
-    // لجلب كل الحركات المالية الخاصة بهذا المستخدم
     public function transactions()
     {
         return $this->hasMany(Transaction::class);
     }
-
-    public function vendorOrders()
+    // الطلبات التي يقوم هذا المستخدم ببيعها (إذا كان بائعاً)
+    public function sales()
     {
-        return $this->hasMany(Order::class, 'vendor_id');
+        return $this->hasMany(Order::class, 'seller_id');
     }
 
-    // 2. علاقة المشتري مع الطلبات التي قام بشرائها
-    public function buyerOrders()
+    // الطلبات التي قام هذا المستخدم بشرائها (إذا كان مشترياً)
+    public function purchases()
     {
         return $this->hasMany(Order::class, 'user_id');
+    }
+
+    public function categoryRel()
+    {
+        // نربط حقل الـ category في جدول المستخدمين مع الـ id في جدول الأقسام
+        return $this->belongsTo(Category::class, 'category');
     }
 }

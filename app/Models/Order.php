@@ -11,22 +11,22 @@ class Order extends Model
 
     protected $fillable = [
         'user_id',
-        'vendor_id',
+        'seller_id', // تأكد من تغييرها هنا أيضاً
         'total_price',
         'status',
         'payment_method'
     ];
 
-    // المشتري المرتبط بهذا الطلب
+    // العلاقة مع المشتري
     public function buyer()
     {
         return $this->belongsTo(User::class, 'user_id');
     }
 
-    // البائع المرتبط بهذا الطلب
-    public function vendor()
+    // العلاقة مع البائع (نستخدم seller_id)
+    public function seller()
     {
-        return $this->belongsTo(User::class, 'vendor_id');
+        return $this->belongsTo(User::class, 'seller_id');
     }
 
     public function transactions()
