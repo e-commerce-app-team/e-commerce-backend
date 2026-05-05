@@ -128,11 +128,25 @@ class UserController extends Controller
         // 5. إنشاء المستخدم
         $user = User::create($validated);
 
-        // 6. إرجاع الرد بدون توكن
         return response()->json([
             'success' => true,
             'message' => 'Buyer registered successfully. Please log in.',
-            'user' => $user
+            'user' => [
+                'id' => $user->id,
+                'first_name' => $user->first_name,
+                'last_name' => $user->last_name,
+                'email' => $user->email,
+                'phone' => $user->phone,
+                'role' => $user->role,
+                'status' => $user->status,
+
+                // روابط الصور الكاملة
+                'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
+                'id_card_photo' => $user->id_card_photo ? asset('storage/' . $user->id_card_photo) : null,
+
+                'created_at' => $user->created_at,
+                'updated_at' => $user->updated_at,
+            ]
         ], 201);
     }
 
@@ -183,19 +197,20 @@ class UserController extends Controller
                 'phone' => $user->phone,
                 'role' => $user->role,
                 'store_name' => $user->store_name,
+                'category_id' => $user->categoryRel->id,
                 'category' => $user->categoryRel ? $user->categoryRel->name : 'N/A',
                 'status' => $user->status,
 
-                // --- الحقول الإضافية التي طلبتها ---
+                'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
+                'store_logo' => $user->store_logo ? asset('storage/' . $user->store_logo) : null,
+                'id_card_photo' => $user->id_card_photo ? asset('storage/' . $user->id_card_photo) : null,
+
                 'commercial_registration_number' => $user->commercial_registration_number,
-                // نستخدم Storage::url للحصول على الرابط الكامل للصورة بدلاً من المسار الداخلي فقط
                 'commercial_record_photo' => $user->commercial_record_photo ? asset('storage/' . $user->commercial_record_photo) : null,
                 'tax_number' => $user->tax_number,
-                // ----------------------------------
 
                 'created_at' => $user->created_at,
             ]
         ], 201);
     }
-
 }
