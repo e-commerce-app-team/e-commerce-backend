@@ -25,113 +25,74 @@ class PaymentController extends Controller
         ]);
     }
 
-    // 2. شحن الرصيد (Deposit) للمشتري فقط
-    public function deposit(Request $request)
+    public function payAndTransfer(Request $request, $orderId)
     {
         $user = auth()->user();
 
-        // التأكد أن المستخدم مشتري
+        // 1. التحقق من الصلاحية ووجود الطلب
         if ($user->role !== 'buyer') {
-            return response()->json(['message' => 'Unauthorized. Only buyers can deposit funds.'], 403);
+            return response()->json(['message' => 'Unauthorized.Only buyers can perform this action.'], 403);
         }
 
-        // التحقق من المبلغ المراد شحنه
-        $request->validate(['amount' => 'required|numeric|min:1000']);
-
-        // تحديث رصيد المستخدم
-        $user->balance += $request->amount;
-        $user->save();
-
-        // تسجيل العملية في جدول الـ Transactions للتوثيق
-        Transaction::create([
-            'user_id' => $user->id,
-            'type' => 'deposit',
-            'amount' => $request->amount,
-            'description' => 'Wallet top-up'
-        ]);
-
-        return response()->json([
-            'message' => 'Balance topped up successfully.',
-            'new_balance' => $user->balance
-        ]);
-    }
-
-    // 3. الدفع باستخدام المحفظة للمشتري فقط
-    public function payWithWallet(Request $request, $orderId)
-    {
-        // الحصول على المستخدم الحالي (المشتري)
-        $user = auth()->user();
-
-        // 1. التأكد أن المستخدم يمتلك صلاحية مشتري (Buyer)
-        if ($user->role !== 'buyer') {
-            return response()->json([
-                'message' => 'Unauthorized. Only buyers can perform this action.'
-            ], 403);
-        }
-
-        // 2. التحقق من وجود الطلب ومن ملكيته لهذا المستخدم
-        // إذا لم يجد الطلب سيرسل استجابة 404 تلقائياً بسبب findOrFail أو firstOrFail
-        $order = Order::where('id', $orderId)
+        $order = Order::with('seller')->where('id', $orderId)
             ->where('user_id', $user->id)
             ->firstOrFail();
 
-        // منع الدفع إذا كان الطلب مدفوعاً بالفعل أو تم تسليمه
+        // منع الدفع المتكرر
         if (in_array($order->status, ['paid', 'delivered'])) {
-            return response()->json([
-                'message' => 'This order has already been paid or processed.'
-            ], 400);
+            return response()->json(['message' => 'Order already processed.'], 400);
         }
 
-        // 3. التحقق من صحة كلمة المرور كإجراء أمان إضافي قبل الخصم
-        $request->validate([
-            'password' => 'required'
-        ]);
-
+        // 2. التحقق من كلمة المرور وكفاية الرصيد
+        $request->validate(['password' => 'required']);
         if (!Hash::check($request->password, $user->password)) {
-            return response()->json([
-                'message' => 'Incorrect password. Payment failed.'
-            ], 401);
+            return response()->json(['message' => 'Incorrect password.'], 401);
         }
 
-        // 4. التحقق من كفاية الرصيد
         if ($user->balance < $order->total_price) {
-            // تحديث حالة الطلب إلى "فشل الدفع" في قاعدة البيانات
-            $order->update(['status' => 'failed_payment']);
-
-            return response()->json([
-                'message' => 'Insufficient balance in your wallet.',
-                'order_status' => 'failed_payment',
-                'current_balance' => $user->balance,
-                'required_amount' => $order->total_price
-            ], 400);
+            return response()->json(['message' => 'Insufficient balance.'], 400);
         }
 
-        // 5. بدء عملية الدفع (Transaction) لضمان سلامة البيانات
+        // 3. العملية المالية المدمجة
         return DB::transaction(function () use ($user, $order) {
 
-            // أ. خصم المبلغ من محفظة المشتري
-            $user->balance -= $order->total_price;
-            $user->save();
+            // أ. خصم من المشتري
+            $user->decrement('balance', $order->total_price);
 
-            // ب. تحديث حالة الطلب إلى "مدفوع"
-            $order->update(['status' => 'paid']);
+            // ب. حساب العمولات فوراً
+            $seller = $order->seller;
+            $totalAmount = $order->total_price;
+            $commissionRate = ($seller->role === 'wholesale') ? 0.05 : 0.10;
+            $adminCommission = $totalAmount * $commissionRate;
+            $sellerProfit = $totalAmount - $adminCommission;
 
-            // ج. تسجيل العملية في جدول السجلات (Transactions)
+            // ج. إضافة الرصيد للبائع وتحديث حالة الطلب
+            $seller->increment('balance', $sellerProfit);
+            $order->update(['status' => 'delivered']); // تحول لـ delivered مباشرة
+
+            // د. تسجيل العمليات (سجل للمشتري وسجل للبائع)
+            // سجل المشتري (Payment)
             Transaction::create([
                 'user_id' => $user->id,
                 'order_id' => $order->id,
                 'type' => 'payment',
-                'amount' => $order->total_price,
-                'description' => "Wallet payment successful for Order #{$order->id}"
+                'amount' => $totalAmount,
+                'description' => "Paid for Order #{$order->id}"
             ]);
 
-            // د. إرسال استجابة النجاح
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Payment completed successfully.',
+            // سجل البائع (Earnings)
+            Transaction::create([
+                'user_id' => $seller->id,
                 'order_id' => $order->id,
-                'order_status' => 'paid',
-                'new_balance' => $user->balance
+                'type' => 'deposit',
+                'amount' => $sellerProfit,
+                'description' => "Earnings from Order #{$order->id} (Auto-transfer)"
+            ]);
+
+            return response()->json([
+                'message' => 'Payment successful and funds transferred to seller.',
+                'new_balance' => $user->balance,
+                'order_status' => 'delivered'
             ], 200);
         });
     }

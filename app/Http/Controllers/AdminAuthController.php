@@ -9,35 +9,36 @@ use Illuminate\Http\Request;
 class AdminAuthController extends Controller
 {
 
-
     public function login(Request $request)
     {
-        // 1. التحقق من المدخلات (استخدام email بدل phone)
+        // 1. Validation with English messages
         $request->validate([
-            'email' => 'required|email',
+            'phone' => ['required', 'regex:/^09[0-9]{8}$/'],
             'password' => 'required|string',
         ]);
 
-        // 2. البحث عن الأدمن بواسطة الإيميل
-        $admin = Admin::where('email', $request->email)->first();
+        // 2. Find admin by phone
+        $admin = Admin::where('phone', $request->phone)->first();
 
-        // 3. التحقق من وجود الحساب وصحة كلمة المرور
+        // 3. Check credentials
         if (!$admin || !Hash::check($request->password, $admin->password)) {
-            return response()->json(['message' => 'Invalid credentials'], 401);
+            return response()->json(['message' => 'Invalid phone number or password.'], 401);
         }
 
-        // 4. توليد التوكن
+        // 4. Create Token
         $token = $admin->createToken('admin-token')->plainTextToken;
 
-        // 5. الرد (تعديل اسم حقل الصورة إلى profile_photo)
+        // 5. Response (Simplified without role_display)
         return response()->json([
             'token' => $token,
+            'role' => $admin->role, // This will return values like: 'super_admin', 'products_admin', etc.
             'admin' => [
                 'id' => $admin->id,
                 'first_name' => $admin->first_name,
                 'last_name' => $admin->last_name,
-                'email' => $admin->email, // أضفت لكِ الإيميل هنا أيضاً بدل الفون
-                'profile_photo' => $admin->profile_photo, // التعديل المطلوب
+                'phone' => $admin->phone,
+                'profile_photo' => $admin->profile_photo,
+                'created_at' => $admin->created_at
             ],
         ]);
     }
@@ -47,3 +48,4 @@ class AdminAuthController extends Controller
         return response()->json(['message' => 'Logged out']);
     }
 }
+

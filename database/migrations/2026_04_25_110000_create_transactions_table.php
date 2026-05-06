@@ -18,8 +18,7 @@ return new class extends Migration {
 
             $table->foreignId('order_id')->nullable()->constrained('orders')->onDelete('set null');            // نوع العملية: شحن، دفع، أو استرداد
             // استخدمنا enum لضمان عدم إدخال قيم عشوائية
-            $table->enum('type', ['deposit', 'payment', 'refund']);
-
+            $table->enum('type', ['deposit', 'payment', 'refund', 'withdrawal']); // أضفنا withdrawal هنا
             // المبلغ (دائماً نستخدم decimal للدقة المالية)
             $table->decimal('amount', 15, 2);
 

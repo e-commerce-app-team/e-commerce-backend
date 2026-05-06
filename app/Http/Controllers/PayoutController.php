@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\PayoutRequest;
+use App\Models\Transaction;
 use Hash;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;   // هذا السطر يحل مشكلة الـ DB
@@ -27,20 +28,19 @@ class PayoutController extends Controller
         ]);
     }
 
-    // 2. تابع طلب سحب رصيد للبائع فقط
-    public function requestWithdraw(Request $request)
+    public function instantWithdraw(Request $request)
     {
         $user = auth()->user();
 
-        // 1. التأكد أن المستخدم بائع أو تاجر جملة (استخدام الـ Helpers التي أضفناها في الموديل)
+        // 1. التأكد أن المستخدم بائع أو تاجر جملة
         if (!$user->isVendor() && !$user->isWholesale()) {
-            return response()->json(['message' => 'Unauthorized. Only sellers can request payouts.'], 403);
+            return response()->json(['message' => 'Unauthorized. Only sellers can withdraw funds.'], 403);
         }
 
-        // 2. التحقق من البيانات المدخلة
+        // 2. التحقق من البيانات (المبلغ وكلمة المرور)
         $request->validate([
             'amount' => 'required|numeric|min:50',
-            'password' => 'required' // تغيير wallet_pin إلى password
+            'password' => 'required'
         ]);
 
         // 3. التحقق من كلمة المرور للأمان
@@ -48,35 +48,41 @@ class PayoutController extends Controller
             return response()->json(['message' => 'Incorrect password.'], 403);
         }
 
-        // 4. استخدام Transaction لضمان سلامة خصم الرصيد
         return DB::transaction(function () use ($user, $request) {
-
-            // إعادة جلب بيانات المستخدم مع قفل السجل (Lock for update) لمنع السحب المزدوج
+            // قفل السجل لمنع العمليات المتزامنة (Race Condition)
             $currentUser = User::where('id', $user->id)->lockForUpdate()->first();
 
-            // 5. التأكد من توفر الرصيد الكافي
+            // 4. التأكد من توفر الرصيد الكافي
             if ($currentUser->balance < $request->amount) {
-                return response()->json(['message' => 'Insufficient balance to complete this transaction.'], 400);
+                return response()->json(['message' => 'Insufficient balance.'], 400);
             }
 
-            // 6. إنشاء سجل طلب السحب
+            // 5. خصم المبلغ فوراً من الرصيد
+            $currentUser->decrement('balance', $request->amount);
+
+            // 6. إنشاء سجل السحب بحالة "مكتمل" (Completed) مباشرة
             $payout = PayoutRequest::create([
                 'user_id' => $currentUser->id,
                 'amount' => $request->amount,
-                // تأكد أن هذه الحقول موجودة في جدول المستخدمين أو يتم إرسالها في الطلب
-                'payout_method' => $currentUser->payout_method ?? 'Not specified',
-                'payout_account' => $currentUser->payout_account ?? 'Not specified',
-                'status' => 'pending'
+                'payout_method' => $currentUser->payout_method ?? 'Default Method',
+                'payout_account' => $currentUser->payout_account ?? 'Default Account',
+                'status' => 'completed', // الحالة مكتملة فوراً
+                'admin_notes' => 'Instant withdrawal processed by user.'
             ]);
 
-            // 7. خصم المبلغ من رصيد المستخدم (تجميد الرصيد)
-            $currentUser->decrement('balance', $request->amount);
+            // 7. (اختياري) تسجيل العملية في جدول الـ Transactions العام لتوثيق حركة الأموال
+            Transaction::create([
+                'user_id' => $currentUser->id,
+                'type' => 'withdrawal',
+                'amount' => $request->amount,
+                'description' => "Instant withdrawal of {$request->amount}"
+            ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Your withdrawal request has been submitted and is awaiting Admin approval.',
+                'message' => 'Withdrawal successful. Funds have been deducted.',
                 'new_balance' => $currentUser->balance,
-                'payout_details' => $payout
+                'details' => $payout
             ]);
         });
     }
