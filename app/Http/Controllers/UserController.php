@@ -47,49 +47,55 @@ class UserController extends Controller
                 ], 403); // 403 Forbidden
             }
 
-            // 4. توليد التوكن (فقط في حال كان الحساب مقبولاً)
-            $token = $user->createToken('auth_token')->plainTextToken;
-
-            // 5. التوجيه بناءً على الرتبة (User Role)
+            // 4. التوجيه وتوليد التوكن بناءً على الرتبة (User Role)
             $redirectTo = '';
             $roleMessage = '';
+            $token = null; // القيمة الافتراضية للتوكن
 
             switch ($user->role) {
                 case 'vendor':
                     $redirectTo = '/vendor/home';
                     $roleMessage = 'Welcome back, Vendor!';
+                    // توليد توكن فقط للبائع
+                    $token = $user->createToken('auth_token')->plainTextToken;
                     break;
+
                 case 'wholesale':
                     $redirectTo = '/wholesale/home';
                     $roleMessage = 'Welcome back, Wholesale Vendor!';
+                    // توليد توكن فقط للبائع بالجملة
+                    $token = $user->createToken('auth_token')->plainTextToken;
                     break;
+
                 default:
                     $redirectTo = '/home';
                     $roleMessage = 'Welcome back, Buyer!';
+                    // المشتري لا يتم توليد توكن له هنا (لأنه استلمه عند الـ register)
+                    $token = null;
                     break;
             }
 
-            // 6. إرسال الرد النهائي مع البيانات والتوكن
+            // 5. إرسال الرد النهائي
             return response()->json([
                 'success' => true,
                 'message' => $roleMessage,
-                'access_token' => $token,
+                'access_token' => $token, // سيكون null في حال كان المشتري هو من سجل دخوله
                 'token_type' => 'Bearer',
                 'redirect_to' => $redirectTo,
                 'user' => [
                     'id' => $user->id,
-                    'name' => $user->name,
+                    'name' => $user->first_name . ' ' . $user->last_name,
                     'email' => $user->email,
                     'role' => $user->role,
-                    'profile_photo' => $user->profile_photo,
+                    'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
                 ]
             ], 200);
         }
 
-        // 7. في حال كانت بيانات الدخول خاطئة
+        // في حال فشل بيانات تسجيل الدخول
         return response()->json([
             'success' => false,
-            'message' => 'Invalid email or password'
+            'message' => 'Invalid email or password.'
         ], 401);
     }
 
@@ -108,48 +114,43 @@ class UserController extends Controller
         // 1. جلب البيانات المفحوصة
         $validated = $request->validated();
 
-        // 2. معالجة صورة الملف الشخصي (اختيارية)
+        // 2. معالجة الصور وإضافتها لنفس المصفوفة ($validated)
         if ($request->hasFile('profile_photo')) {
             $validated['profile_photo'] = $request->file('profile_photo')->store('buyers/profiles', 'public');
         }
 
-        // 3. معالجة صورة الهوية (اختيارية)
         if ($request->hasFile('id_card_photo')) {
             $validated['id_card_photo'] = $request->file('id_card_photo')->store('buyers/ids', 'public');
         }
 
-        // 4. تشفير كلمة المرور وتحديد الرتبة والحالة
+        // 3. تشفير كلمة المرور وتحديد الرتبة والحالة
         $validated['password'] = Hash::make($request->password);
         $validated['role'] = 'buyer';
-
-        // الحالة 'approved' لكي يتمكن من تسجيل الدخول فوراً
         $validated['status'] = 'approved';
 
-        // 5. إنشاء المستخدم
+        // 4. إنشاء المستخدم باستخدام المصفوفة التي تحتوي الآن على الصور
         $user = User::create($validated);
 
+        // --- إضافة: توليد التوكن للمشتري عند التسجيل ---
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        // 5. الرد النهائي مع التوكن
         return response()->json([
             'success' => true,
-            'message' => 'Buyer registered successfully. Please log in.',
+            'message' => 'Buyer registered successfully.',
+            'access_token' => $token, // التوكن المضاف
+            'token_type' => 'Bearer',
             'user' => [
                 'id' => $user->id,
                 'first_name' => $user->first_name,
                 'last_name' => $user->last_name,
                 'email' => $user->email,
-                'phone' => $user->phone,
                 'role' => $user->role,
-                'status' => $user->status,
-
-                // روابط الصور الكاملة
                 'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
                 'id_card_photo' => $user->id_card_photo ? asset('storage/' . $user->id_card_photo) : null,
-
-                'created_at' => $user->created_at,
-                'updated_at' => $user->updated_at,
             ]
         ], 201);
     }
-
     public function registerSeller(SellerRegisterRequest $request)
     {
         // 1. جلب البيانات التي تم التحقق منها
@@ -213,4 +214,5 @@ class UserController extends Controller
             ]
         ], 201);
     }
+
 }
