@@ -42,7 +42,7 @@ Route::get('buyerBalance', [PaymentController::class, 'getWalletBalance'])->midd
 Route::get('buyerHistory', [PaymentController::class, 'getTransactionHistory'])->middleware('auth:sanctum');
 Route::post('orders/{orderId}/pay', [PaymentController::class, 'payAndTransfer'])->middleware('auth:sanctum');
 
-Route::post('storeOrders', [OrderController::class, 'store'])->middleware('auth:sanctum')->middleware('auth:sanctum');
+Route::post('storeOrders', [OrderController::class, 'store'])->middleware('auth:sanctum');
 
 Route::get('categories', [CategoryController::class, 'getAllCategories'])->middleware('auth:sanctum');
 
