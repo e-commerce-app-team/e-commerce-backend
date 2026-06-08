@@ -16,6 +16,15 @@ class ProductSaveRequest extends FormRequest
         $isUpdate = $this->isMethod('PUT') || $this->isMethod('PATCH');
 
         return [
+            // التحقق من مصفوفة المتغيرات القادمة من الواجهة
+            'variants'             => 'nullable|array',
+            'variants.*.attributes' => 'required|array', // للتأكد من إرسال الخصائص كـ [color, size]
+            'variants.*.price'     => 'nullable|numeric|min:0',
+            'variants.*.quantity'  => 'required|integer|min:0',
+            'variants.*.sku'       => 'nullable|string',
+            'variants.*.image'     => 'nullable|image|mimes:jpeg,png,jpg,webp|max:2048', // صورة مستقلة
+            'variants.*.is_active' => 'sometimes|boolean',
+            //
             'name' => $isUpdate ? 'sometimes|required|string|max:255' : 'required|string|max:255',
             'description' => $isUpdate ? 'sometimes|required|string' : 'required|string',
 
@@ -38,7 +47,7 @@ class ProductSaveRequest extends FormRequest
             'width' => 'nullable|numeric|min:0',
             'height' => 'nullable|numeric|min:0',
 
-            'status' => 'required|in:active,draft,hidden',
+            'status' => $isUpdate ? 'sometimes|required|in:active,draft,hidden' : 'required|in:active,draft,hidden',
             'category_id' => $isUpdate ? 'sometimes|required|exists:categories,id' : 'required|exists:categories,id',
         ];
     }

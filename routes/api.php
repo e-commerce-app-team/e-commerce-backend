@@ -45,7 +45,20 @@ Route::post('orders/{orderId}/pay', [PaymentController::class, 'payAndTransfer']
 Route::post('storeOrders', [OrderController::class, 'store'])->middleware('auth:sanctum');
 
 Route::get('categories', [CategoryController::class, 'getAllCategories'])->middleware('auth:sanctum');
+// شغلي
+Route::middleware('auth:sanctum')->group(function () {
+    
+    // 1. إنشاء منتج جديد (مع متغيراته تلقائياً إن وجدت)
+    Route::post('products', [ProductController::class, 'store']);
+    
+    // 2. تحديث جزئي لبيانات المنتج أو تحديث/إعادة بناء المتغيرات
+    Route::patch('products/{id}', [ProductController::class, 'update']);
+    
+    // 3. حذف المنتج نهائياً (وسيتم حذف كافة المتغيرات والصور التابعة له من السيرفر)
+    Route::delete('products/{id}', [ProductController::class, 'destroy']);
+    
+});
 
-Route::post('products', [ProductController::class, 'store'])->middleware('auth:sanctum');
-Route::post('products/{id}', [ProductController::class, 'update'])->middleware('auth:sanctum');
-Route::delete('products/{id}', [ProductController::class, 'destroy'])->middleware('auth:sanctum');
+//هاد منشان اذا بدي اعمل ايقاف او تفعيل احدى المتغيرات الخاصة بمنتج معين
+// رووت سريع لتفعيل أو إيقاف متغير محدد وتعديل كميته وسعره مباشرة
+Route::patch('variants/{id}/toggle', [ProductController::class, 'toggleVariant'])->middleware('auth:sanctum');

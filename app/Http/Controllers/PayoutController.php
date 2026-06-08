@@ -27,7 +27,7 @@ class PayoutController extends Controller
             'payout_account' => $user->payout_account,
         ]);
     }
-
+//تابع لاجراء عملية سحب فورية للتاجر والبائع العادي 
     public function instantWithdraw(Request $request)
     {
         $user = auth()->user();

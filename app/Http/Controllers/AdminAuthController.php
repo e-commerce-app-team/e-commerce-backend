@@ -25,7 +25,7 @@ class AdminAuthController extends Controller
             return response()->json(['message' => 'Invalid phone number or password.'], 401);
         }
 
-        // 4. Create Token
+        // 4. create token 
         $token = $admin->createToken('admin-token')->plainTextToken;
 
         // 5. Response (Simplified without role_display)

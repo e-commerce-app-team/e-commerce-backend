@@ -20,6 +20,7 @@ class AdminController extends Controller
 
     public function reject($id)
     {
+
         $user = User::findOrFail($id);
         $user->status = 'rejected';
         $user->save();
