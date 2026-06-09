@@ -45,7 +45,24 @@ Route::post('orders/{orderId}/pay', [PaymentController::class, 'payAndTransfer']
 Route::post('storeOrders', [OrderController::class, 'store'])->middleware('auth:sanctum');
 
 Route::get('categories', [CategoryController::class, 'getAllCategories'])->middleware('auth:sanctum');
-// شغلي
+Route::middleware(['auth:sanctum', 'super_admin'])->group(function () {
+    
+    // 2. إنشاء قسم جديد
+    Route::post('categories', [CategoryController::class, 'storeDepartment']);
+
+    // 3. تعديل بيانات قسم معين (استخدمنا POST هنا بدلاً من PUT لأن Laravel يواجه مشكلة برمجية عند استقبال ملفات وصور عبر الـ PUT)
+    Route::post('categories/{id}', [CategoryController::class, 'updateDepartment']);
+
+    // 4. إظهار أو إخفاء قسم معين
+    Route::patch('categories/toggle-visibility', [CategoryController::class, 'toggleVisibility']);
+
+    // 5. تحديث ترتيب الأقسام بالسحب والإفلات
+    Route::patch('categories/reorder', [CategoryController::class, 'reorderDepartment']);
+
+    // 6. حذف قسم نهائياً
+    Route::delete('categories/{id}', [CategoryController::class, 'destroyDepartment']);
+    
+});// شغلي
 Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('products', [ProductController::class, 'store'])->middleware('auth:sanctum');

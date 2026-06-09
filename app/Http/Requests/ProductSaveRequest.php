@@ -17,12 +17,12 @@ class ProductSaveRequest extends FormRequest
 
         return [
             // التحقق من مصفوفة المتغيرات القادمة من الواجهة
-            'variants'             => 'nullable|array',
+            'variants' => 'nullable|array',
             'variants.*.attributes' => 'required|array', // للتأكد من إرسال الخصائص كـ [color, size]
-            'variants.*.price'     => 'nullable|numeric|min:0',
-            'variants.*.quantity'  => 'required|integer|min:0',
-            'variants.*.sku'       => 'nullable|string',
-            'variants.*.image'     => 'nullable|image|mimes:jpeg,png,jpg,webp|max:2048', // صورة مستقلة
+            'variants.*.price' => 'nullable|numeric|min:0',
+            'variants.*.quantity' => 'required|integer|min:0',
+            'variants.*.sku' => 'nullable|string',
+            'variants.*.image' => 'nullable|image|mimes:jpeg,png,jpg,webp|max:2048', // صورة مستقلة
             'variants.*.is_active' => 'sometimes|boolean',
             //
             'name' => $isUpdate ? 'sometimes|required|string|max:255' : 'required|string|max:255',
