@@ -11,8 +11,14 @@ return new class extends Migration {
     public function up(): void
     {
         Schema::create('categories', function (Blueprint $table) {
-            $table->id(); // رقم القسم (1, 2, 3...)
-            $table->string('name'); // اسم القسم (إلكترونيات، ألبسة...)
+            $table->id();
+            $table->foreignId('parent_id')->nullable()->constrained('categories')->onDelete('cascade');
+            $table->string('name');
+            $table->string('slug')->unique();
+            $table->string('image_url')->nullable();
+            $table->string('icon_url')->nullable();
+            $table->integer('order_position')->default(0); // الترتيب للسحب والإفلات
+            $table->boolean('is_visible')->default(true);
             $table->timestamps();
         });
     }
