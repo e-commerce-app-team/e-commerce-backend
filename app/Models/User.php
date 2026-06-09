@@ -89,7 +89,7 @@ class User extends Authenticatable
         // نربط حقل الـ category في جدول المستخدمين مع الـ id في جدول الأقسام
         return $this->belongsTo(Category::class, 'category');
     }
-    
+
     // المنتجات التي يمتلكها البائع (تمت إضافتها)
     public function products()
     {
