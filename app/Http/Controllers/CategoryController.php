@@ -11,8 +11,8 @@ use Illuminate\Support\Facades\Storage;
 
 class CategoryController extends Controller
 {
-    // 1. عرض الشجرة كاملة (تبدأ بالأقسام الرئيسية وتنزل للأعماق)
-    public function index(): JsonResponse
+    
+    public function getAllCategories(): JsonResponse
     {
         $categories = Category::whereNull('parent_id') 
             ->with(['recursiveChildren']) // جلب الشجرة عودياً
@@ -26,7 +26,7 @@ class CategoryController extends Controller
     }
 
     // 2. إنشاء قسم جديد (رئيسي أو فرعي في أي مستوى)
-    public function store(CategorySaveRequest $request): JsonResponse
+    public function storeDepartment(CategorySaveRequest $request): JsonResponse
     {
        
         $validated = $request->validated();
@@ -50,7 +50,7 @@ class CategoryController extends Controller
     }
 
     // 3. تعديل بيانات قسم معين
-   public function update(CategorySaveRequest $request, $id): JsonResponse
+   public function updateDepartment(CategorySaveRequest $request, $id): JsonResponse
 {
     // استخدام find بدلاً من findOrFail لكي لا يرمي خطأ تلقائي
     $category = Category::find($id);
@@ -117,7 +117,7 @@ class CategoryController extends Controller
     ], 200);
 }
     // 5. تحديث ترتيب الأقسام بالسحب والإفلات (Drag & Drop)
-    public function reorder(Request $request): JsonResponse
+    public function reorderDepartment(Request $request): JsonResponse
     {
         $request->validate([
             'positions' => 'required|array',
@@ -136,7 +136,7 @@ class CategoryController extends Controller
     }
 
     // 6. حذف قسم (سيحذف الفروع التابعة له تلقائياً بسبب cascade)
-    public function destroy($id): JsonResponse
+    public function destroyDepartment($id): JsonResponse
 {
     // البحث عن القسم
     $category = Category::find($id);

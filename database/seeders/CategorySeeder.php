@@ -13,11 +13,11 @@ class CategorySeeder extends Seeder
     public function run(): void
     {
         $data = [
-            ['name' => 'إلكترونيات وهواتف'],
-            ['name' => 'ألبسة وأحذية'],
-            ['name' => 'أدوات منزلية'],
-            ['name' => 'عطور وتجميل'],
-            ['name' => 'أخرى'],
+            ['name' => 'إلكترونيات وهواتف', 'slug' => 'electronics-and-phones'],
+            ['name' => 'ألبسة وأحذية',     'slug' => 'clothes-and-shoes'],
+            ['name' => 'أدوات منزلية',    'slug' => 'home-appliances'],
+            ['name' => 'عطور وتجميل',    'slug' => 'perfumes-and-cosmetics'],
+            ['name' => 'أخرى',           'slug' => 'others'],
         ];
 
         foreach ($data as $item) {
