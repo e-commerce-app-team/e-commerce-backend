@@ -14,6 +14,8 @@ class ProductController extends Controller
     public function store(ProductSaveRequest $request): JsonResponse
     {
         $user = auth()->user();
+
+        // جلب البيانات التي تم التحقق منها بنجاح من الـ Request
         $validated = $request->validated();
         $validated['user_id'] = $user->id;
 
@@ -31,17 +33,23 @@ class ProductController extends Controller
         }
         $validated['images'] = $imagePaths;
 
-        // إنشاء المنتج الأساسي
+        // 3. معالجة حقل مخزون المستودعات (Warehouse Stock) لتاجر الجملة
+        // إذا قامت الواجهة الأمامية بإرساله كـ string (JSON)، نقوم بفك تشفيره ليتم حفظه كـ array
+        if (isset($validated['warehouse_stock']) && is_string($validated['warehouse_stock'])) {
+            $validated['warehouse_stock'] = json_decode($validated['warehouse_stock'], true);
+        }
+
+        // 4. إنشاء المنتج الأساسي (يحتوي تلقائياً على حقول الجملة والشحن المجاني)
         $product = Product::create($validated);
 
-        // 3. السحر: توليد وحفظ مصفوفة المتغيرات تلقائياً إذا أرسلت من الواجهة
+        // 5. معالجة المتغيرات (Variants) المرفقة مع المنتج
         if ($request->has('variants')) {
-            foreach ($request->file('variants', []) as $index => $variantData) {
-                // جلب البيانات النصية للمتغير المقابل للأندكس
-                $rawVariant = $request->input("variants.$index");
+            // الدوران على مصفوفة المتغيرات القادمة من الطلب
+            foreach ($request->input('variants', []) as $index => $rawVariant) {
 
                 $variantFields = [
                     'product_id' => $product->id,
+                    // التأكد إذا كانت الخصائص (attributes) تحتاج فك ترميز JSON أم لا
                     'attributes' => is_string($rawVariant['attributes']) ? json_decode($rawVariant['attributes'], true) : $rawVariant['attributes'],
                     'price' => $rawVariant['price'] ?? null,
                     'quantity' => $rawVariant['quantity'] ?? 0,
@@ -49,7 +57,7 @@ class ProductController extends Controller
                     'is_active' => $rawVariant['is_active'] ?? true,
                 ];
 
-                // إذا قام التاجر برفع صورة مستقلة لهذا المتغير المحدد
+                // رفع صورة المتغير الفرعية بناءً على الاندكس الحالي للمصفوفة
                 if ($request->hasFile("variants.$index.image")) {
                     $variantFields['image_url'] = $request->file("variants.$index.image")->store('products/variants', 'public');
                 }
@@ -58,7 +66,7 @@ class ProductController extends Controller
             }
         }
 
-        // إرجاع المنتج مع متغيراته كاملة
+        // 6. إرجاع النتيجة النهائية مع تحميل المتغيرات
         return response()->json([
             'success' => true,
             'message' => 'Product and its variants created successfully.',
@@ -163,7 +171,7 @@ class ProductController extends Controller
         ], 200);
     }
     //هاد اذا بدي عدل بس عمتغير خاص بنتج معين مش على كلشي
-    public function toggleVariant(Request $request, $id): \Illuminate\Http\JsonResponse
+    public function toggleVariant(Request $request, $id): JsonResponse
     {
         $request->validate([
             'is_active' => 'sometimes|boolean',
@@ -189,103 +197,175 @@ class ProductController extends Controller
 
     public function applySearch(Request $request): JsonResponse
     {
-        // يبدأ بالاستعلام الأساسي المؤمن للبائع الحالي
-        $query = Product::where('user_id', auth()->id())->with('variants');
+        // 1. التحقق من صحة البيانات القادمة من الـ JSON Body
+        $request->validate([
+            'name' => 'nullable|string|max:255',
+            'sku' => 'nullable|string|max:255',
+            'per_page' => 'nullable|integer|min:1'
+        ]);
 
-        if ($request->filled('search')) {
-            $search = $request->input('search');
+        $name = $request->input('name');
+        $sku = $request->input('sku');
 
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('sku', 'like', "%{$search}%")
-                    ->orWhereHas('variants', function ($vQ) use ($search) {
-                        $vQ->where('sku', 'like', "%{$search}%");
-                    });
+        // 2. الاستعلام الأساسي لجلب منتجات المستخدم الحالي
+        $query = Product::where('user_id', auth()->id());
+
+        // 3. تطبيق الفلترة إذا تم إرسال اسم أو SKU
+        if ($name || $sku) {
+            $query->where(function ($q) use ($name, $sku) {
+                if ($name) {
+                    $q->where('name', 'LIKE', "%{$name}%");
+                }
+
+                if ($sku) {
+                    if ($name) {
+                        $q->orWhere('sku', '=', $sku); // مطابقة تامة للـ SKU
+                    } else {
+                        $q->where('sku', '=', $sku);
+                    }
+                }
             });
         }
 
-        // جلب المنتجات وإرجاعها فوراً
-        $products = $query->paginate($request->input('per_page', 15));
+        // 4. جلب المتغيرات وتقسيم النتائج إلى صفحات
+        $products = $query->with('variants')->paginate($request->input('per_page', 15));
 
+        // 5. إرجاع النتيجة النهائية
         return response()->json([
             'success' => true,
-            'message' => 'Search results retrieved successfully.',
+            'message' => 'Products searched successfully.',
             'data' => $products
         ], 200);
     }
 
-    /**
-     * 2. تابع مستقل للتصفية فقط
-     * الرابط: GET /api/products/filter?category_id=1&status=active&stock_level=low
-     */
-    public function applyFilters(Request $request): JsonResponse
+
+    public function filterByCategory(Request $request): JsonResponse
     {
-        // يبدأ بالاستعلام الأساسي المؤمن للبائع الحالي
+        // 1. التحقق من صحة البيانات القادمة في الـ Body
+        $request->validate([
+            'category_id' => 'required|exists:categories,id', // تأكد من اسم جدول الفئات لديك
+            'per_page' => 'nullable|integer|min:1'
+        ]);
+
+        // 2. الاستعلام الأساسي لجلب منتجات المستخدم الحالي مع متغيراتها
         $query = Product::where('user_id', auth()->id())->with('variants');
 
-        // التصفية حسب القسم
-        if ($request->filled('category_id')) {
-            $query->where('category_id', $request->input('category_id'));
-        }
+        // 3. جلب القيمة وتطبيق الفلترة
+        $categoryId = $request->input('category_id');
+        $query->where('category_id', $categoryId);
 
-        // التصفية حسب الحالة
-        if ($request->filled('status')) {
-            $query->where('status', $request->input('status'));
-        }
-
-        // التصفية حسب مستوى المخزون
-        if ($request->filled('stock_level')) {
-            $stock = $request->input('stock_level');
-            if ($stock === 'low') {
-                $query->whereRaw('quantity <= alert_threshold');
-            } elseif ($stock === 'out') {
-                $query->where('quantity', 0);
-            }
-        }
-
-        // جلب المنتجات وإرجاعها فوراً
+        // 4. تقسيم النتائج إلى صفحات
         $products = $query->paginate($request->input('per_page', 15));
 
+        // 5. إرجاع النتيجة النهائية
         return response()->json([
             'success' => true,
-            'message' => 'Filtered products retrieved successfully.',
+            'message' => 'Products filtered by category successfully.',
             'data' => $products
         ], 200);
     }
 
-    /**
-     * 3. تابع مستقل للترتيب فقط
-     * الرابط: GET /api/products/sort?sort_by=price_asc
-     */
+    public function filterByStatus(Request $request): JsonResponse
+    {
+        // 1. التحقق من صحة البيانات القادمة في الـ Body
+        $request->validate([
+            'status' => 'required|string|in:active,draft,hidden', // أضف الحالات المعتمدة لديك هنا
+            'per_page' => 'nullable|integer|min:1'
+        ]);
+
+        // 2. الاستعلام الأساسي لجلب منتجات المستخدم الحالي مع متغيراتها
+        $query = Product::where('user_id', auth()->id())->with('variants');
+
+        // 3. جلب القيمة من الـ Body وتطبيق الفلترة
+        $status = $request->input('status');
+        $query->where('status', $status);
+
+        // 4. تقسيم النتائج إلى صفحات
+        $products = $query->paginate($request->input('per_page', 15));
+
+        // 5. إرجاع النتيجة النهائية
+        return response()->json([
+            'success' => true,
+            'message' => 'Products filtered by status successfully.',
+            'data' => $products
+        ], 200);
+    }
+
+
+    public function filterByStock(Request $request): JsonResponse
+    {
+        // 1. التحقق من صحة البيانات القادمة في الـ Body
+        $request->validate([
+            'stock_level' => 'required|string|in:low,out,good',
+            'per_page' => 'nullable|integer|min:1'
+        ]);
+
+        // 2. الاستعلام الأساسي لجلب منتجات المستخدم الحالي مع متغيراتها
+        $query = Product::where('user_id', auth()->id())->with('variants');
+
+        // 3. جلب القيمة من الـ Body وتطبيق الفلترة بناءً على الشرط
+        $stock = $request->input('stock_level');
+
+        if ($stock === 'low') {
+            $query->whereRaw('quantity <= alert_threshold');
+        } elseif ($stock === 'out') {
+            $query->where('quantity', 0);
+        } elseif ($stock === 'good') {
+            // حالة جلب المنتجات ذات المخزون الجيد (الكمية أكبر من أو تساوي 50)
+            $query->where('quantity', '>=', 50);
+        }
+
+        // 4. تقسيم النتائج إلى صفحات
+        $products = $query->paginate($request->input('per_page', 15));
+
+        // 5. إرجاع النتيجة النهائية
+        return response()->json([
+            'success' => true,
+            'message' => 'Products filtered by stock level successfully.',
+            'data' => $products
+        ], 200);
+    }
     public function applySorting(Request $request): JsonResponse
     {
-        // يبدأ بالاستعلام الأساسي المؤمن للبائع الحالي
-        $query = Product::where('user_id', auth()->id())->with('variants');
+        // 1. التحقق من صحة البيانات القادمة لضمان قراءة الخيارات بشكل صحيح
+        $request->validate([
+            'sort_by' => 'nullable|string|in:latest,oldest,price_asc,price_desc,best_selling',
+            'per_page' => 'nullable|integer|min:1'
+        ]);
 
+        // 2. الاستعلام الأساسي المؤمن للبائع الحالي
+        $query = Product::with('variants');
+        // تأكيد جلب القيمة وتنظيفها
         $sortBy = $request->input('sort_by', 'latest');
 
+        // 3. تطبيق الفرز الصارم (إضافة الترتيب بالـ id كعامل حسم لمنع تشابه النتائج)
         switch ($sortBy) {
             case 'oldest':
-                $query->orderBy('created_at', 'asc');
+                $query->orderBy('created_at', 'asc')->orderBy('id', 'asc');
                 break;
+
             case 'price_asc':
-                $query->orderBy('original_price', 'asc');
+                $query->orderBy('original_price', 'asc')->orderBy('id', 'asc');
                 break;
+
             case 'price_desc':
-                $query->orderBy('original_price', 'desc');
+                $query->orderBy('original_price', 'desc')->orderBy('id', 'desc');
                 break;
+
             case 'best_selling':
-                $query->orderBy('id', 'desc');
+                $query->orderBy('sales_count', 'desc')->orderBy('id', 'desc');
                 break;
+
             case 'latest':
             default:
-                $query->orderBy('created_at', 'desc');
+                $query->orderBy('created_at', 'desc')->orderBy('id', 'desc');
                 break;
         }
 
-        // جلب المنتجات وإرجاعها فوراً
+        // 4. جلب المنتجات وتقسيم النتائج إلى صفحات
         $products = $query->paginate($request->input('per_page', 15));
 
+        // 5. إرجاع النتيجة النهائية
         return response()->json([
             'success' => true,
             'message' => 'Sorted products retrieved successfully.',

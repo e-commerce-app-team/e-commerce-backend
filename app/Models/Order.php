@@ -33,5 +33,14 @@ class Order extends Model
     {
         return $this->hasMany(Transaction::class);
     }
+
+    public function products()
+    {
+        // هنا نربط الطلب بالمنتجات عبر جدول وسيط (مثلاً order_product)
+        // مع جلب حقول الكمية والسعر من الجدول الوسيط باستخدام withPivot
+        return $this->belongsToMany(Product::class, 'order_product')
+            ->withPivot('quantity', 'price')
+            ->withTimestamps();
+    }
 }
 
