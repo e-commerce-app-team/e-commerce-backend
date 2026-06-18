@@ -14,10 +14,10 @@ class CategorySeeder extends Seeder
     {
         $data = [
             ['name' => 'إلكترونيات وهواتف', 'slug' => 'electronics-and-phones'],
-            ['name' => 'ألبسة وأحذية',     'slug' => 'clothes-and-shoes'],
-            ['name' => 'أدوات منزلية',    'slug' => 'home-appliances'],
-            ['name' => 'عطور وتجميل',    'slug' => 'perfumes-and-cosmetics'],
-            ['name' => 'أخرى',           'slug' => 'others'],
+            ['name' => 'ألبسة وأحذية', 'slug' => 'clothes-and-shoes'],
+            ['name' => 'أدوات منزلية', 'slug' => 'home-appliances'],
+            ['name' => 'عطور وتجميل', 'slug' => 'perfumes-and-cosmetics'],
+            ['name' => 'أخرى', 'slug' => 'others'],
         ];
 
         foreach ($data as $item) {

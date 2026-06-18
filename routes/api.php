@@ -1,5 +1,4 @@
 <?php
-
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\CategoryController;
@@ -45,34 +44,30 @@ Route::post('orders/{orderId}/pay', [PaymentController::class, 'payAndTransfer']
 Route::post('storeOrders', [OrderController::class, 'store'])->middleware('auth:sanctum');
 
 Route::get('categories', [CategoryController::class, 'getAllCategories'])->middleware('auth:sanctum');
+
 Route::middleware(['auth:sanctum', 'super_admin'])->group(function () {
-    
-    // 2. إنشاء قسم جديد
     Route::post('categories', [CategoryController::class, 'storeDepartment']);
-
-    // 3. تعديل بيانات قسم معين (استخدمنا POST هنا بدلاً من PUT لأن Laravel يواجه مشكلة برمجية عند استقبال ملفات وصور عبر الـ PUT)
     Route::post('categories/{id}', [CategoryController::class, 'updateDepartment']);
-
-    // 4. إظهار أو إخفاء قسم معين
     Route::patch('categories/toggle-visibility', [CategoryController::class, 'toggleVisibility']);
-
-    // 5. تحديث ترتيب الأقسام بالسحب والإفلات
     Route::patch('categories/reorder', [CategoryController::class, 'reorderDepartment']);
-
-    // 6. حذف قسم نهائياً
     Route::delete('categories/{id}', [CategoryController::class, 'destroyDepartment']);
-    
-});// شغلي
+
+});
 Route::middleware('auth:sanctum')->group(function () {
- Route::post('products', [ProductController::class, 'store'])->middleware('auth:sanctum');
-    Route::post('products/{id}', [ProductController::class, 'update'])->middleware('auth:sanctum');
+
+    Route::post('products/filter-by-category', [ProductController::class, 'filterByCategory'])->middleware('auth:sanctum');
+    Route::post('products/filter-by-status', [ProductController::class, 'filterByStatus'])->middleware('auth:sanctum');
+    Route::post('products/filter-by-stock', [ProductController::class, 'filterByStock'])->middleware('auth:sanctum');
+    Route::post('products', [ProductController::class, 'store'])->middleware('auth:sanctum');
+    Route::put('products/{id}', [ProductController::class, 'update'])->middleware('auth:sanctum');
     Route::delete('products/{id}', [ProductController::class, 'destroy'])->middleware('auth:sanctum');
     Route::get('products/search', [ProductController::class, 'applySearch'])->middleware('auth:sanctum');
-    Route::get('products/filter', [ProductController::class, 'applyFilters'])->middleware('auth:sanctum');
     Route::get('products/sort', [ProductController::class, 'applySorting'])->middleware('auth:sanctum');
     Route::post('products/bulk-action', [ProductController::class, 'bulkAction'])->middleware('auth:sanctum');
-    //هاد منشان اذا بدي اعمل ايقاف او تفعيل احدى المتغيرات الخاصة بمنتج معين
-// رووت سريع لتفعيل أو إيقاف متغير محدد وتعديل كميته وسعره مباشرة
+
+
     Route::post('variants/{id}/toggle', [ProductController::class, 'toggleVariant'])->middleware('auth:sanctum');
 
 });
+
+

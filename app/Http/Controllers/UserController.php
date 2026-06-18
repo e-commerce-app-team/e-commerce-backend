@@ -108,7 +108,6 @@ class UserController extends Controller
 
         ]);
     }
-
     public function registerBuyer(BuyerRegisterRequest $request)
     {
         // 1. جلب البيانات المفحوصة
