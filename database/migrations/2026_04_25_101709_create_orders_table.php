@@ -21,26 +21,27 @@ return new class extends Migration {
             // إجمالي السعر الخاص بالفاتورة
             $table->decimal('total_price', 15, 2);
 
-            // 2. حالات الطلب مدمجة بالكامل (الحالات الخاصة بك + تبويبات لوحة التحكم)
+            // 2. حالات الطلب مدمجة بالكامل حسب التدفق المعتمد
             $table->enum('status', [
-                'pending',             // جديد / معلق
-                'paid',                // تم الدفع
+                'pending',             // جديد / معلق / بانتظار الدفع أو موافقة التاجر
+                'paid',                // تم الدفع (للتوافق القديم)
                 'failed_payment',      // فشل الدفع
-                'processing',          // قيد التجهيز
+                'processing',          // قيد التجهيز (وافق عليه التاجر)
                 'shipped',             // تم الشحن / في الطريق
-                'delivered',           // مكتمل / تم التسليم
+                'delivered',           // مكتمل / تم التسليم (وتحرير الأموال)
                 'cancelled_returned'   // ملغى / مرتجع
             ])->default('pending');
 
             // طريقة الدفع المستعملة
             $table->string('payment_method')->default('wallet');
 
-            // 3. حالة الدفع والإدارة الآلية لنظام الضمان وحجز الأموال (Escrow)
+            // 3. حالة الدفع والإدارة الآلية لنظام الضمان وحجز الأموال (Escrow) 🌟
             $table->enum('payment_status', [
-                'escrow_locked',       // محجوز في الضمان
-                'released',            // تم فك الحجز للبائع
+                'unpaid',              // غير مدفوع (عند الإنشاء فوراً)
+                'paid_escrow',         // مدفوع ومحجوز في الضمان (بعد دفع المشتري وقبل تحرير المال)
+                'released',            // تم فك الحجز وترحيله لرصيد البائع المتاح (بعد التأكيد أو الـ 48 ساعة)
                 'refunded'             // تم الارتجاع للمشتري
-            ])->default('escrow_locked');
+            ])->default('unpaid');
 
             // 4. معلومات وعنوان التسليم التفصيلي للمشتري
             $table->string('shipping_address_title')->nullable(); // اسم العنوان (مثال: المنزل، العمل)
@@ -49,8 +50,10 @@ return new class extends Migration {
             // 5. ملاحظات وتعليمات خاصة قادمة من العميل للتاجر
             $table->text('customer_notes')->nullable();
 
-            // 💡 التعديل الجديد: إضافة حقل تاريخ ووقت التجهيز/التسليم المتوقع 
-            $table->dateTime('estimated_delivery_date')->nullable();
+            // 💡 التعديلات الجديدة: التوثيق الدقيق للوقت لإدارة الـ 48 ساعة تلقائياً 🌟
+            $table->timestamp('shipped_at')->nullable();          // وقت الشحن الفعلي (يبدأ منه مؤقت الـ 48 ساعة)
+            $table->timestamp('delivered_at')->nullable();        // وقت الاستلام الفعلي (سواء ضغط زر المشتري أو تلقائي)
+            $table->dateTime('estimated_delivery_date')->nullable(); // وقت التسليم المتوقع
 
             // 6. الـ Timeline الزمني لحفظ تتبع مراحل الطلب (مصفوفة JSON)
             $table->json('status_timeline')->nullable();

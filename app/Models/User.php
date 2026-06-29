@@ -7,6 +7,8 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
+
+
 class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
@@ -20,11 +22,32 @@ class User extends Authenticatable
         'profile_photo',
         'id_card_photo',
         'commercial_record_photo',
-        'store_logo',
+
+        // معلومات المتجر الأساسية والشعار والغلاف
         'store_name',
+        'store_description',             // 💡 جديد
+        'store_logo',
+        'store_cover_photo',          // 💡 جديد
+
+        // أوقات الدوام وسياسة الإرجاع
+        'working_hours',              // 💡 جديد
+        'return_policy',              // 💡 جديد
+
+        // التواصل الإضافي وروابط السوشيال
+        'store_email',                // 💡 جديد
+        'social_links',               // 💡 جديد
+
+        // الموقع الجغرافي والعنوان
+        'latitude',                   // 💡 جديد
+        'longitude',                  // 💡 جديد
+        'detailed_address',           // 💡 جديد
+
+        // معلومات الأعمال الرسمية (Wholesale)
         'commercial_registration_number',
         'tax_number',
         'category',
+
+        // الإعدادات والمالية
         'status',
         'role',
         'balance',
@@ -45,7 +68,9 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'wallet_pin' => 'hashed',
-            'balance' => 'decimal:2'
+            'balance' => 'decimal:2',
+            'working_hours' => 'array', // تضمن قراءة وكتابة أوقات الدوام كمصفوفة تلقائياً
+            'social_links' => 'array',  // تضمن قراءة وكتابة روابط التواصل كمصفوفة تلقائياً
         ];
     }
 
@@ -100,5 +125,10 @@ class User extends Authenticatable
     public function products()
     {
         return $this->hasMany(Product::class, 'user_id');
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
     }
 }

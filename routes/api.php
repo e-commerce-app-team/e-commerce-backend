@@ -2,6 +2,7 @@
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PaymentController;
@@ -19,6 +20,10 @@ Route::Post('login', [UserController::class, 'login']);
 Route::post('register/buyer', [UserController::class, 'registerBuyer']);
 Route::post('register/seller', [UserController::class, 'registerSeller']);
 Route::post('logout', [UserController::class, 'logout'])->middleware('auth:sanctum');
+
+Route::post('seller/store-settings/create', [UserController::class, 'createStoreSettings'])->middleware('auth:sanctum');
+Route::post('seller/store-settings/update', [UserController::class, 'updateStoreSettings'])->middleware('auth:sanctum');
+Route::get('seller/store-settings', [UserController::class, 'getStoreSettings'])->middleware('auth:sanctum');
 
 Route::post('admin/login', [AdminAuthController::class, 'login']);
 Route::post('admin/logout', [AdminAuthController::class, 'logout'])->middleware('auth:sanctum');
@@ -41,6 +46,8 @@ Route::post('payouts/instant-withdraw', [PayoutController::class, 'instantWithdr
 Route::get('buyerBalance', [PaymentController::class, 'getWalletBalance'])->middleware('auth:sanctum');
 Route::get('buyerHistory', [PaymentController::class, 'getTransactionHistory'])->middleware('auth:sanctum');
 Route::post('orders/{orderId}/pay', [PaymentController::class, 'payAndTransfer'])->middleware('auth:sanctum');
+
+Route::post('orders/{orderId}/confirm-delivery', [PaymentController::class, 'confirmDelivery'])->middleware('auth:sanctum');
 
 
 Route::middleware(['auth:sanctum'])->group(function () {
@@ -89,6 +96,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
     Route::post('variants/{id}/toggle', [ProductController::class, 'toggleVariant'])->middleware('auth:sanctum');
+
+
+    Route::get('wholesale/invoices', [InvoiceController::class, 'getInvoices'])->middleware('auth:sanctum');
+    Route::get('wholesale/reports/vat', [InvoiceController::class, 'getVatReport'])->middleware('auth:sanctum');
 
 });
 

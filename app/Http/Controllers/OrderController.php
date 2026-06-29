@@ -90,6 +90,9 @@ class OrderController extends Controller
     /**
      * 1. إنشاء طلب جديد وحجز المبلغ في الضمان (Escrow)
      */
+
+    // 1. إنشاء الطلب (يبقى pending وبدون تغيير جوهري)
+// ==========================================
     public function store(Request $request)
     {
         $buyer = auth()->user();
@@ -110,35 +113,41 @@ class OrderController extends Controller
             'payment_method' => 'nullable|string'
         ]);
 
+        $calculatedSubtotal = 0;
         $calculatedTotalPrice = 0;
         $validatedItems = [];
+        $vatRate = 0.15;
 
         foreach ($request->input('items') as $item) {
             $product = Product::find($item['product_id']);
-
             if ($product) {
-                // التحقق من العروض وتواريخ صلاحيتها
-                $currentPrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
+                $basePrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
                     ? $product->offer_price
                     : $product->original_price;
 
-                $itemTotalPrice = $currentPrice * $item['quantity'];
+                $itemSubtotal = $basePrice * $item['quantity'];
+                $calculatedSubtotal += $itemSubtotal;
+
+                $priceWithVat = $basePrice * (1 + $vatRate);
+                $itemTotalPrice = $priceWithVat * $item['quantity'];
                 $calculatedTotalPrice += $itemTotalPrice;
 
                 $validatedItems[] = [
                     'product' => $product,
                     'quantity' => $item['quantity'],
-                    'price' => $currentPrice
+                    'price' => $priceWithVat
                 ];
             }
         }
 
+        $totalVatAmount = $calculatedTotalPrice - $calculatedSubtotal;
+
         $order = Order::create([
             'user_id' => $buyer->id,
             'seller_id' => $request->seller_id,
-            'total_price' => $calculatedTotalPrice,
+            'total_price' => round($calculatedTotalPrice, 2),
             'status' => 'pending',
-            'payment_status' => 'escrow_locked', // حجز المال تلقائياً في الضمان
+            'payment_status' => 'unpaid', // تبدأ غير مدفوعة
             'payment_method' => $request->input('payment_method', 'wallet'),
             'shipping_address_title' => $request->shipping_address_title,
             'shipping_address_details' => $request->shipping_address_details,
@@ -146,7 +155,7 @@ class OrderController extends Controller
             'status_timeline' => [
                 [
                     'status' => 'pending',
-                    'title' => 'تم استلام الطلب بنجاح وهو قيد الانتظار',
+                    'title' => 'تم استلام الطلب بنجاح وهو قيد الانتظار وبانتظار الدفع',
                     'time' => now()->toDateTimeString()
                 ]
             ]
@@ -156,21 +165,24 @@ class OrderController extends Controller
         foreach ($validatedItems as $validatedItem) {
             $syncData[$validatedItem['product']->id] = [
                 'quantity' => $validatedItem['quantity'],
-                'price' => $validatedItem['price']
+                'price' => round($validatedItem['price'], 2)
             ];
             $validatedItem['product']->increment('sales_count', $validatedItem['quantity']);
         }
-
         $order->products()->attach($syncData);
 
         return response()->json([
             'success' => true,
-            'message' => 'Order created successfully.',
+            'message' => 'Order created successfully. Please proceed to payment.',
             'order_id' => $order->id,
-            'total_calculated_price' => $calculatedTotalPrice
+            'order_status' => 'pending',
+            'pricing_details' => [
+                'subtotal_before_vat' => round($calculatedSubtotal, 2),
+                'vat_amount' => round($totalVatAmount, 2),
+                'total_after_vat' => round($calculatedTotalPrice, 2)
+            ]
         ], 201);
     }
-
     /**
      * 2. تحديث حالة الطلب والـ Timeline (مسموح فقط للبائع صاحب الطلب)
      */
@@ -635,29 +647,28 @@ class OrderController extends Controller
 
      * 1. قبول الطلب (التحقق من المخزون وتحويل الحالة إلى جاري التجهيز)
      */
+    // ==========================================
+// 2. قبول التاجر للطلب (يتحول إلى processing)
+// ==========================================
     public function acceptOrder(Request $request)
     {
         $request->validate([
             'order_id' => 'required|exists:orders,id'
         ]);
 
-        // جلب الطلب مع المنتجات المرتبطة به
+        // تأكيد أن الطلب مدفوع ومحجوز وضمن حالة الانتظار
         $order = Order::with('products')->where('id', $request->order_id)
             ->where('seller_id', auth()->id())
             ->where('status', 'pending')
+            ->where('payment_status', 'paid_escrow') // لا يمكن الموافقة قبل الدفع الحقيقي
             ->firstOrFail();
 
-        // بيئة Transaction لضمان تنفيذ العمليات معاً أو إلغائها في حال حدوث خطأ
         DB::beginTransaction();
         try {
-            // التحقق من أن المخزون (quantity) كافٍ لجميع المنتجات في الطلب
             foreach ($order->products as $product) {
                 $requestedQuantity = $product->pivot->quantity;
-
-                // جلب بيانات المنتج الطازجة للتأكد من حقل quantity الفعلي
                 $freshProduct = $product->fresh();
 
-                // التعديل: استخدام حقل quantity بدلاً من stock
                 if ($freshProduct->quantity < $requestedQuantity) {
                     return response()->json([
                         'success' => false,
@@ -666,20 +677,17 @@ class OrderController extends Controller
                 }
             }
 
-            // خصم الكمية المطلوبة من الحقل الصحيح (quantity) في المخزن
             foreach ($order->products as $product) {
                 $product->decrement('quantity', $product->pivot->quantity);
             }
 
-            // تحديث السجل الزمني لحالة الطلب
             $timeline = $order->status_timeline ?? [];
             $timeline[] = [
                 'status' => 'processing',
-                'title' => 'Stock verified and order accepted. Now in processing stage.',
+                'title' => 'Stock verified and order accepted by seller. Now in processing stage.',
                 'time' => now()->toDateTimeString()
             ];
 
-            // التحديث المباشر لحالة الطلب عبر الكلاس لمنع تداخل الأنواع والتحذيرات
             Order::where('id', $order->id)->update([
                 'status' => 'processing',
                 'status_timeline' => $timeline
@@ -689,16 +697,15 @@ class OrderController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Stock verified, quantities deducted, and order accepted successfully.',
+                'message' => 'Order accepted successfully. Preparing items.',
                 'order_status' => 'processing'
             ]);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['success' => false, 'message' => 'An unexpected error occurred while processing the order.'], 500);
+            return response()->json(['success' => false, 'message' => 'An error occurred.'], 500);
         }
     }
-
     /**
      * 2. رفض الطلب (إرجاع المال للمشتري وتوثيق السبب)
      */
@@ -707,6 +714,12 @@ class OrderController extends Controller
      */
     /**
      * 2. رفض الطلب (إرجاع المال للمشتري وتوثيق السبب)
+     */
+    /**
+     * 2. رفض الطلب (إرجاع المال للمشتري، استرداد المخزون، وخصم عداد المبيعات)
+     */
+    /**
+     * 2. رفض الطلب (إرجاع المال للمشتري، استرداد المخزون، وخصم عداد المبيعات)
      */
     public function rejectOrder(Request $request)
     {
@@ -715,55 +728,89 @@ class OrderController extends Controller
             'rejection_reason' => 'required|string|max:500'
         ]);
 
-        // جلب الطلب مع المنتجات
-        $order = Order::with('products')->where('id', $request->order_id)
+        // جلب الطلب مع العلاقات لضمان دقة العمليات المالية والمخزون
+        $order = Order::with(['products', 'buyer', 'seller'])->where('id', $request->order_id)
             ->where('seller_id', auth()->id())
             ->whereIn('status', ['pending', 'processing'])
             ->firstOrFail();
 
-        DB::beginTransaction();
-        try {
-            // إذا تم الرفض بعد القبول (الحالة قيد التجهيز)، نعيد الكميات للمخزن
-            if ($order->status === 'processing') {
-                foreach ($order->products as $product) {
-                    Product::where('id', $product->id)->increment('quantity', $product->pivot->quantity);
+        return DB::transaction(function () use ($order, $request) {
+
+            // 1. إعادة الأموال للمشتري وعكس عمليات رصيد البائع (إذا كان قد تم الدفع والتعليق في الضمان paid_escrow)
+            if ($order->payment_status === 'paid_escrow') {
+                $buyer = $order->buyer;
+                $seller = $order->seller;
+
+                // حساب الحصة التي أضيفت سابقاً لرصيد البائع لخصمها (إجمالي السعر - العمولات)
+                $totalAmount = $order->total_price;
+                $commissionRate = ($seller->role === 'wholesale') ? 0.05 : 0.10;
+                $adminCommission = $totalAmount * $commissionRate;
+                $sellerProfit = $totalAmount - $adminCommission;
+
+                // أ. إعادة المبلغ كاملاً لرصيد المشتري
+                $buyer->increment('balance', $totalAmount);
+
+                // ب. سحب المبلغ المحجوز من رصيد البائع الإجمالي
+                $seller->decrement('balance', $sellerProfit);
+
+                // ج. تسجيل حركات مالية عكسية للاسترداد (Refund Transactions)
+                Transaction::create([
+                    'user_id' => $buyer->id,
+                    'order_id' => $order->id,
+                    'type' => 'refund',
+                    'amount' => $totalAmount,
+                    'description' => "Refunded amount for rejected Order #{$order->id}"
+                ]);
+
+                Transaction::create([
+                    'user_id' => $seller->id,
+                    'order_id' => $order->id,
+                    'type' => 'withdrawal',
+                    'amount' => $sellerProfit,
+                    'description' => "Deducted escrow funds due to rejection of Order #{$order->id}"
+                ]);
+            }
+
+            // 2. إدارة المخزون وعداد المبيعات (Sales Count) لكل منتج في الطلب
+            foreach ($order->products as $product) {
+                $orderQuantity = $product->pivot->quantity;
+
+                // أ. إذا تم الرفض وهو قيد التجهيز (processing)، نعيد الكمية للمخزن
+                if ($order->status === 'processing') {
+                    $product->increment('quantity', $orderQuantity);
+                }
+
+                // ب. خصم الكمية من عداد المبيعات (sales_count)
+                if ($product->sales_count >= $orderQuantity) {
+                    $product->decrement('sales_count', $orderQuantity);
+                } else {
+                    $product->update(['sales_count' => 0]);
                 }
             }
 
-            // تحديث السجل الزمني لحالة الرفض
+            // 3. تجهيز السجل الزمني (Timeline) الجديد
             $timeline = $order->status_timeline ?? [];
             $timeline[] = [
                 'status' => 'cancelled_returned',
-                'title' => 'Order rejected by seller. Funds refunded to buyer.',
+                'title' => 'Order rejected by seller. Total funds successfully refunded to buyer.',
                 'reason' => $request->rejection_reason,
                 'time' => now()->toDateTimeString()
             ];
 
-            // 💡 التعديل القاتل: استخدام 'cancelled_returned' و 'refunded' لتطابق الميجريشن تماماً
+            // 4. الحل النهائي للتحذير 🌟: جلب نسخة جديدة مخصصة للتحديث فقط بدون علاقات ملاصقة
             Order::where('id', $order->id)->update([
                 'status' => 'cancelled_returned',
                 'payment_status' => 'refunded',
-                'status_timeline' => $timeline
+                'status_timeline' => json_encode($timeline) // تحويل يدوي صريح لضمان التوافق التام مع دالة update المباشرة
             ]);
-
-            DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Order rejected successfully, stock restored, and funds refunded to buyer.',
+                'message' => 'Order rejected successfully. Buyer balance restored, stock/sales count reverted.',
                 'rejection_reason' => $request->rejection_reason
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'An error occurred while cancelling the order.',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+            ], 200);
+        });
     }
-
     /**
      * 3. تعديل وقت التجهيز المتوقع وإرسال إشعار بالتأخير
      */
@@ -808,13 +855,14 @@ class OrderController extends Controller
     /**
      * 4. تأكيد تجهيز الطلب بالكامل وطباعة بيان الشحن
      */
+    // 3. شحن الطلب من قبل التاجر (يتحول إلى shipped)
+// ==========================================
     public function readyForShipping(Request $request)
     {
         $request->validate([
             'order_id' => 'required|exists:orders,id'
         ]);
 
-        // جلب الطلب مع بيانات المشتري والمنتجات لتجهيز الفاتورة أو بيان الشحن
         $order = Order::with(['buyer', 'products'])->where('id', $request->order_id)
             ->where('seller_id', auth()->id())
             ->where('status', 'processing')
@@ -822,30 +870,30 @@ class OrderController extends Controller
 
         $timeline = $order->status_timeline ?? [];
         $timeline[] = [
-            'status' => 'ready',
-            'title' => 'Preparation completed. Order is waiting for the shipping courier.',
+            'status' => 'shipped',
+            'title' => 'Order has been dispatched and handed over to courier.',
             'time' => now()->toDateTimeString()
         ];
 
-        // تحديث حالة الطلب إلى مشحون/جاهز للشحن
         Order::where('id', $order->id)->update([
             'status' => 'shipped',
+            'shipped_at' => now(), // 🔥 تسجيل وقت الشحن بدقة لحساب الـ 48 ساعة تلقائياً
             'status_timeline' => $timeline
         ]);
 
-        // تجميع تفاصيل بيان الشحن الجاهز للطباعة على الطرود
         $shippingManifest = [
             'invoice_number' => 'SHP-' . $order->id . '-' . now()->format('ymd'),
             'seller_name' => auth()->user()->first_name . ' ' . auth()->user()->last_name,
             'buyer_name' => $order->buyer ? $order->buyer->first_name . ' ' . $order->buyer->last_name : 'N/A',
-            'shipping_address' => $order->shipping_address_details ?? 'Default registered address',
+            'shipping_address' => $order->shipping_address_details ?? 'Default address',
             'total_amount' => $order->total_price . ' SAR',
             'items_count' => $order->products->sum('pivot.quantity'),
         ];
 
         return response()->json([
             'success' => true,
-            'message' => 'Order readiness confirmed. Shipping manifest generated for printing.',
+            'message' => 'Order marked as shipped.',
+            'order_status' => 'shipped',
             'shipping_manifest' => $shippingManifest
         ]);
     }

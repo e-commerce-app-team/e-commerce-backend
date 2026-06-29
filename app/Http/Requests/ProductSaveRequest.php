@@ -49,7 +49,7 @@ class ProductSaveRequest extends FormRequest
             // حقول البيع بالجملة (تم تصحيح استخدام المتغير $isWholesale)
             // -------------------------------------------------------------------------
             'wholesale_price' => $isWholesale
-                ? ($isUpdate ? 'sometimes|required|numeric|min:0|lt:original_price' : 'required|numeric|min:0|lt:original_price')
+                ? ($isUpdate ? 'sometimes|nullable|numeric|min:0|lt:original_price' : 'nullable|numeric|min:0|lt:original_price')
                 : 'nullable|prohibited',
 
             'min_wholesale_qty' => $isWholesale

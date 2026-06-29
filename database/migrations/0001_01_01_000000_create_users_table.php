@@ -9,31 +9,46 @@ return new class extends Migration {
     {
         Schema::create('users', function (Blueprint $table) {
             $table->id();
-            // معلومات أساسية (مشتركة للجميع)
+            // 1. معلومات الحساب الشخصية (مشتركة)
             $table->string('first_name');
             $table->string('last_name');
             $table->string('email')->unique();
             $table->string('phone')->unique();
             $table->string('password');
-            $table->string('profile_photo')->nullable();
+            $table->string('profile_photo')->nullable(); // صورة الملف الشخصي
 
-            // صور التحقق (حسب النوع)
-            $table->string('id_card_photo')->nullable(); // للكل (حسب طلبك الأخير)
-            $table->string('commercial_record_photo')->nullable(); // فقط للـ Wholesale
-            $table->string('store_logo')->nullable(); // اختياري للبائعين
+            // 2. صور التحقق والهوية
+            $table->string('id_card_photo')->nullable();
+            $table->string('commercial_record_photo')->nullable(); // (Wholesale)
 
-            // معلومات المتجر والأعمال
-            $table->string('store_name')->nullable(); // اسم المتجر (للبائعين)
+            // 3. معلومات المتجر الأساسية والشعار والغلاف
+            $table->string('store_name')->nullable();
+            $table->text('store_description')->nullable(); // وصف المتجر
+            $table->string('store_logo')->nullable();      // الشعار (Logo)
+            $table->string('store_cover_photo')->nullable(); // غلاف المتجر
+
             $table->string('category')->nullable(); // التصنيف (للبائعين)
-            $table->string('commercial_registration_number')->unique()->nullable(); // السجل (Wholesale)
-            $table->string('tax_number')->nullable(); // الرقم الضريبي (Wholesale - اختياري)
 
+            // 4. أوقات الدوام والعطلات وسياسة الإرجاع
+            $table->json('working_hours')->nullable();     // أوقات الدوام وأيام العطل
+            $table->text('return_policy')->nullable();     // سياسة الإرجاع
 
-            // الإعدادات والحالة
+            // 5. معلومات التواصل الإضافية للمتجر وروابط السوشيال
+            $table->string('store_email')->nullable();     // بريد التواصل للمتجر
+            $table->json('social_links')->nullable();      // روابط حسابات التواصل الاجتماعي
+
+            // 6. الموقع الجغرافي والعنوان التفصيلي
+            $table->decimal('latitude', 10, 8)->nullable();
+            $table->decimal('longitude', 11, 8)->nullable();
+            $table->text('detailed_address')->nullable();  // العنوان التفصيلي
+
+            // 7. معلومات الأعمال والأرقام الرسمية (Wholesale)
+            $table->string('commercial_registration_number')->unique()->nullable();
+            $table->string('tax_number')->nullable();
+
+            // 8. الإعدادات والمالية
             $table->enum('role', ['buyer', 'vendor', 'wholesale'])->default('buyer');
             $table->enum('status', ['pending', 'approved', 'rejected', 'blocked'])->default('pending');
-
-            // المحفظة والمالية
             $table->decimal('balance', 10, 2)->default(0);
             $table->string('payout_method')->nullable();
             $table->string('payout_account')->nullable();
@@ -44,6 +59,7 @@ return new class extends Migration {
             $table->timestamps();
         });
 
+        // جدول الجلسات كما هو
         Schema::create('sessions', function (Blueprint $table) {
             $table->string('id')->primary();
             $table->foreignId('user_id')->nullable()->index();

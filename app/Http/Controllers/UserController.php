@@ -10,6 +10,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 
 class UserController extends Controller
 {
@@ -220,6 +221,127 @@ class UserController extends Controller
         ], 201);
     }
 
+    //  [تابع 1]: إدخال وحفظ المعلومات لأول مرة (CREATE)
+    public function createStoreSettings(Request $request)
+    {
+        $user = auth()->user();
+        $validated = $request->validate([
+            'store_name' => 'required|string|max:255',
+            'store_description' => 'nullable|string|max:1000',
+            'store_email' => 'nullable|email|max:255',
+            'detailed_address' => 'nullable|string|max:500',
+            'latitude' => 'nullable|numeric',
+            'longitude' => 'nullable|numeric',
+            'return_policy' => 'nullable|string|max:2000',
+            'profile_photo' => 'nullable|image|max:2048',
+            'store_logo' => 'nullable|image|max:2048',
+            'store_cover_photo' => 'nullable|image|max:3072',
+            'working_hours' => 'nullable|array',
+            'social_links' => 'nullable|array',
+        ]);
 
-    // hala 
+        // رفع الصور لأول مرة دون الحاجة للحذف
+        if ($request->hasFile('profile_photo')) {
+            $validated['profile_photo'] = $request->file('profile_photo')->store('sellers/profiles', 'public');
+        }
+        if ($request->hasFile('store_logo')) {
+            $validated['store_logo'] = $request->file('store_logo')->store('sellers/logos', 'public');
+        }
+        if ($request->hasFile('store_cover_photo')) {
+            $validated['store_cover_photo'] = $request->file('store_cover_photo')->store('sellers/covers', 'public');
+        }
+
+        $user->update($validated);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Store settings created successfully.',
+            'user' => $user
+        ], 201);
+    }
+
+    // 🛠️ [تابع 2]: تعديل وتحديث المعلومات (UPDATE)
+    public function updateStoreSettings(Request $request)
+    {
+        $user = auth()->user();
+
+        // التعديل غالباً تكون فيه الحقول اختيارية (sometimes) لأن البائع قد يغير حقل واحد فقط
+        $validated = $request->validate([
+            'store_name' => 'sometimes|required|string|max:255',
+            'store_description' => 'nullable|string|max:1000',
+            'store_email' => 'nullable|email|max:255',
+            'detailed_address' => 'nullable|string|max:500',
+            'latitude' => 'nullable|numeric',
+            'longitude' => 'nullable|numeric',
+            'return_policy' => 'nullable|string|max:2000',
+            'profile_photo' => 'nullable|image|max:2048',
+            'store_logo' => 'nullable|image|max:2048',
+            'store_cover_photo' => 'nullable|image|max:3072',
+            'working_hours' => 'nullable|array',
+            'social_links' => 'nullable|array',
+        ]);
+
+        // صيانة الصور عند التعديل (حذف القديم ورفع الجديد)
+        if ($request->hasFile('profile_photo')) {
+            if ($user->profile_photo && Storage::disk('public')->exists($user->profile_photo)) {
+                Storage::disk('public')->delete($user->profile_photo);
+            }
+            $validated['profile_photo'] = $request->file('profile_photo')->store('sellers/profiles', 'public');
+        }
+
+        if ($request->hasFile('store_logo')) {
+            if ($user->store_logo && Storage::disk('public')->exists($user->store_logo)) {
+                Storage::disk('public')->delete($user->store_logo);
+            }
+            $validated['store_logo'] = $request->file('store_logo')->store('sellers/logos', 'public');
+        }
+
+        if ($request->hasFile('store_cover_photo')) {
+            if ($user->store_cover_photo && Storage::disk('public')->exists($user->store_cover_photo)) {
+                Storage::disk('public')->delete($user->store_cover_photo);
+            }
+            $validated['store_cover_photo'] = $request->file('store_cover_photo')->store('sellers/covers', 'public');
+        }
+
+        $user->update($validated);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Store settings updated successfully.',
+            'user' => $user
+        ], 200);
+    }
+
+    // 🔄 [تابع 3]: استرجاع وجلب المعلومات للعرض (GET / READ)
+    public function getStoreSettings()
+    {
+        $user = auth()->user();
+
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'first_name' => $user->first_name,
+                'last_name' => $user->last_name,
+                'email' => $user->email,
+                'phone' => $user->phone,
+                'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
+                'store_name' => $user->store_name,
+                'store_description' => $user->store_description,
+                'store_logo' => $user->store_logo ? asset('storage/' . $user->store_logo) : null,
+                'store_cover_photo' => $user->store_cover_photo ? asset('storage/' . $user->store_cover_photo) : null,
+                'working_hours' => $user->working_hours,
+                'return_policy' => $user->return_policy,
+                'store_email' => $user->store_email ?? $user->email,
+                'social_links' => $user->social_links,
+                'latitude' => $user->latitude,
+                'longitude' => $user->longitude,
+                'detailed_address' => $user->detailed_address,
+            ]
+        ], 200);
+    }
 }
+
