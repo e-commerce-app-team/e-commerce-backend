@@ -82,7 +82,7 @@ class UserController extends Controller
                     break;
             }
 
-            // 6. إرسال الرد النهائي
+            // 6. إرسال الرد النهائي مع جميع الحقول
             return response()->json([
                 'success' => true,
                 'message' => $roleMessage,
@@ -91,10 +91,17 @@ class UserController extends Controller
                 'redirect_to' => $redirectTo,
                 'user' => [
                     'id' => $user->id,
+                    'first_name' => $user->first_name,
+                    'last_name' => $user->last_name,
                     'name' => $user->first_name . ' ' . $user->last_name,
                     'email' => $user->email,
                     'phone' => $user->phone,
                     'role' => $user->role,
+                    'status' => $user->status,
+                    'store_name' => $user->store_name ?? null,
+                    'category' => $user->category ?? null,
+                    'email_verified_at' => $user->email_verified_at ? $user->email_verified_at->toDateTimeString() : null,
+                    'phone_verified_at' => $user->phone_verified_at ? $user->phone_verified_at->toDateTimeString() : null,
                     'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
                 ]
             ], 200);
