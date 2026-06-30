@@ -656,11 +656,10 @@ class OrderController extends Controller
             'order_id' => 'required|exists:orders,id'
         ]);
 
-        // تأكيد أن الطلب مدفوع ومحجوز وضمن حالة الانتظار
         $order = Order::with('products')->where('id', $request->order_id)
             ->where('seller_id', auth()->id())
             ->where('status', 'pending')
-            ->where('payment_status', 'paid_escrow') // لا يمكن الموافقة قبل الدفع الحقيقي
+            ->where('payment_status', 'paid_escrow')
             ->firstOrFail();
 
         DB::beginTransaction();
@@ -690,7 +689,7 @@ class OrderController extends Controller
 
             Order::where('id', $order->id)->update([
                 'status' => 'processing',
-                'status_timeline' => $timeline
+                'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
             ]);
 
             DB::commit();
@@ -728,7 +727,6 @@ class OrderController extends Controller
             'rejection_reason' => 'required|string|max:500'
         ]);
 
-        // جلب الطلب مع العلاقات لضمان دقة العمليات المالية والمخزون
         $order = Order::with(['products', 'buyer', 'seller'])->where('id', $request->order_id)
             ->where('seller_id', auth()->id())
             ->whereIn('status', ['pending', 'processing'])
@@ -736,24 +734,18 @@ class OrderController extends Controller
 
         return DB::transaction(function () use ($order, $request) {
 
-            // 1. إعادة الأموال للمشتري وعكس عمليات رصيد البائع (إذا كان قد تم الدفع والتعليق في الضمان paid_escrow)
             if ($order->payment_status === 'paid_escrow') {
                 $buyer = $order->buyer;
                 $seller = $order->seller;
 
-                // حساب الحصة التي أضيفت سابقاً لرصيد البائع لخصمها (إجمالي السعر - العمولات)
                 $totalAmount = $order->total_price;
                 $commissionRate = ($seller->role === 'wholesale') ? 0.05 : 0.10;
                 $adminCommission = $totalAmount * $commissionRate;
                 $sellerProfit = $totalAmount - $adminCommission;
 
-                // أ. إعادة المبلغ كاملاً لرصيد المشتري
                 $buyer->increment('balance', $totalAmount);
-
-                // ب. سحب المبلغ المحجوز من رصيد البائع الإجمالي
                 $seller->decrement('balance', $sellerProfit);
 
-                // ج. تسجيل حركات مالية عكسية للاسترداد (Refund Transactions)
                 Transaction::create([
                     'user_id' => $buyer->id,
                     'order_id' => $order->id,
@@ -771,16 +763,13 @@ class OrderController extends Controller
                 ]);
             }
 
-            // 2. إدارة المخزون وعداد المبيعات (Sales Count) لكل منتج في الطلب
             foreach ($order->products as $product) {
                 $orderQuantity = $product->pivot->quantity;
 
-                // أ. إذا تم الرفض وهو قيد التجهيز (processing)، نعيد الكمية للمخزن
                 if ($order->status === 'processing') {
                     $product->increment('quantity', $orderQuantity);
                 }
 
-                // ب. خصم الكمية من عداد المبيعات (sales_count)
                 if ($product->sales_count >= $orderQuantity) {
                     $product->decrement('sales_count', $orderQuantity);
                 } else {
@@ -788,7 +777,6 @@ class OrderController extends Controller
                 }
             }
 
-            // 3. تجهيز السجل الزمني (Timeline) الجديد
             $timeline = $order->status_timeline ?? [];
             $timeline[] = [
                 'status' => 'cancelled_returned',
@@ -797,11 +785,10 @@ class OrderController extends Controller
                 'time' => now()->toDateTimeString()
             ];
 
-            // 4. الحل النهائي للتحذير 🌟: جلب نسخة جديدة مخصصة للتحديث فقط بدون علاقات ملاصقة
             Order::where('id', $order->id)->update([
                 'status' => 'cancelled_returned',
                 'payment_status' => 'refunded',
-                'status_timeline' => json_encode($timeline) // تحويل يدوي صريح لضمان التوافق التام مع دالة update المباشرة
+                'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
             ]);
 
             return response()->json([
@@ -822,7 +809,6 @@ class OrderController extends Controller
             'delay_notice_message' => 'nullable|string|max:500'
         ]);
 
-        // جلب الطلب المخصص للتاجر والتحقق من أنه قيد التجهيز
         $order = Order::where('id', $request->order_id)
             ->where('seller_id', auth()->id())
             ->where('status', 'processing')
@@ -839,10 +825,9 @@ class OrderController extends Controller
             'time' => now()->toDateTimeString()
         ];
 
-        // تحديث تاريخ التسليم المتوقع في قاعدة البيانات
         Order::where('id', $order->id)->update([
             'estimated_delivery_date' => $request->estimated_delivery_date,
-            'status_timeline' => $timeline
+            'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
         ]);
 
         return response()->json([
@@ -877,8 +862,8 @@ class OrderController extends Controller
 
         Order::where('id', $order->id)->update([
             'status' => 'shipped',
-            'shipped_at' => now(), // 🔥 تسجيل وقت الشحن بدقة لحساب الـ 48 ساعة تلقائياً
-            'status_timeline' => $timeline
+            'shipped_at' => now(),
+            'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
         ]);
 
         $shippingManifest = [
