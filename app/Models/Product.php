@@ -31,7 +31,8 @@ class Product extends Model
         'height',
         'status',
         'is_free_shipping',  // تم الإضافة
-        'sales_count'
+        'sales_count',
+        'department_id'
     ];
 
     // تحويل الحقل إلى مصفوفة تلقائياً
@@ -57,5 +58,9 @@ class Product extends Model
         return $this->belongsToMany(Order::class, 'order_product')
             ->withPivot('quantity', 'price')
             ->withTimestamps();
+    }
+    public function department()
+    {
+        return $this->belongsTo(Department::class);
     }
 }

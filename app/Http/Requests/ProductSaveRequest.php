@@ -75,7 +75,9 @@ class ProductSaveRequest extends FormRequest
             'height' => 'nullable|numeric|min:0',
 
             'status' => $isUpdate ? 'sometimes|required|in:active,draft,hidden' : 'required|in:active,draft,hidden',
-            'category_id' => $isUpdate ? 'sometimes|required|exists:categories,id' : 'required|exists:categories,id',
+            // بعد
+            'category_id' => 'nullable|exists:categories,id',
+            'department_id' => 'required|exists:departments,id',
         ];
     }
 

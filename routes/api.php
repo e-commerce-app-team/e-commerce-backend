@@ -66,7 +66,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('orders/reject', [OrderController::class, 'rejectOrder']);
     Route::post('orders/update-time', [OrderController::class, 'updatePreparationTime']);
     Route::post('orders/ready-shipping', [OrderController::class, 'readyForShipping']);
+
+    Route::get('my-orders', [OrderController::class, 'myOrders']);
 });
+
 
 
 Route::get('categories', [CategoryController::class, 'getAllCategories'])->middleware('auth:sanctum');
@@ -87,6 +90,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('products/filter-by-category', [ProductController::class, 'filterByCategory'])->middleware('auth:sanctum');
     Route::post('products/filter-by-status', [ProductController::class, 'filterByStatus'])->middleware('auth:sanctum');
     Route::post('products/filter-by-stock', [ProductController::class, 'filterByStock'])->middleware('auth:sanctum');
+    Route::post('products/filter/department', [ProductController::class, 'filterByDepartment']);
     Route::post('products', [ProductController::class, 'store'])->middleware('auth:sanctum');
     Route::put('products/{id}', [ProductController::class, 'update'])->middleware('auth:sanctum');
     Route::delete('products/{id}', [ProductController::class, 'destroy'])->middleware('auth:sanctum');

@@ -51,4 +51,5 @@ class Department extends Model
     {
         return $this->hasMany(Product::class);
     }
+
 }

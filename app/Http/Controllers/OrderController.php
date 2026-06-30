@@ -898,6 +898,48 @@ class OrderController extends Controller
         ]);
     }
 
+    public function myOrders(Request $request)
+    {
+        $user = auth()->user();
 
+        $query = Order::with([
+            'buyer:id,first_name,last_name,email,phone',
+            'products'
+        ]);
+
+        if (in_array($user->role, ['vendor', 'wholesale'])) {
+            // ✅ البائع: يشوف كل الطلبات اللي وردته (كل المشترين)
+            $query->where('seller_id', $user->id);
+        } else {
+            // ✅ المشتري: يشوف كل طلباته (من كل البائعين)
+            $query->where('user_id', $user->id);
+        }
+
+        // 📌 فلترة حسب الحالة (اختياري) - للكل
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
+
+        // 📌 فلترة حسب التاريخ (اختياري)
+        if ($request->has('from_date')) {
+            $query->whereDate('created_at', '>=', $request->from_date);
+        }
+        if ($request->has('to_date')) {
+            $query->whereDate('created_at', '<=', $request->to_date);
+        }
+
+        $orders = $query->latest()->paginate($request->input('per_page', 15));
+
+        // 📌 إضافة بيانات إضافية لكل طلبية
+        $orders->getCollection()->transform(function ($order) {
+            $order->total_items = $order->products->sum('pivot.quantity');
+            return $order;
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $orders
+        ], 200);
+    }
 }
 

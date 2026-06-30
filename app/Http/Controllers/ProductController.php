@@ -311,8 +311,7 @@ class ProductController extends Controller
         } elseif ($stock === 'out') {
             $query->where('quantity', 0);
         } elseif ($stock === 'good') {
-            // حالة جلب المنتجات ذات المخزون الجيد (الكمية أكبر من أو تساوي 50)
-            $query->where('quantity', '>=', 50);
+            $query->whereRaw('quantity > alert_threshold');
         }
 
         // 4. تقسيم النتائج إلى صفحات
@@ -332,7 +331,7 @@ class ProductController extends Controller
             'per_page' => 'nullable|integer|min:1'
         ]);
 
-        $query = Product::with('variants');
+        $query = Product::where('user_id', auth()->id())->with('variants');
         $sortBy = $request->input('sort_by', 'latest');
 
         // دائماً نحسب المبيعات الحقيقية المدفوعة ديناميكياً لضمان دقة البيانات في كل الحالات
@@ -365,7 +364,7 @@ class ProductController extends Controller
 
         // 💡 تحويل القيمة ديناميكياً لكي يرى المستخدم الرقم الحقيقي المدفوع في حقل sales_count
         $products->getCollection()->transform(function ($product) {
-            $product->sales_count = (int) $product->paid_sales_sum; 
+            $product->sales_count = (int) $product->paid_sales_sum;
             unset($product->paid_sales_sum); // حذف الحقل الإضافي الزائد ليكون الـ JSON نظيفاً
             return $product;
         });
@@ -431,6 +430,25 @@ class ProductController extends Controller
         return response()->json([
             'success' => true,
             'message' => $message
+        ], 200);
+    }
+
+    public function filterByDepartment(Request $request): JsonResponse
+    {
+        $request->validate([
+            'department_id' => 'required|exists:departments,id',
+            'per_page' => 'nullable|integer|min:1'
+        ]);
+
+        $products = Product::where('user_id', auth()->id())
+            ->where('department_id', $request->input('department_id'))
+            ->with('variants')
+            ->paginate($request->input('per_page', 15));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Products filtered by department successfully.',
+            'data' => $products
         ], 200);
     }
 }
