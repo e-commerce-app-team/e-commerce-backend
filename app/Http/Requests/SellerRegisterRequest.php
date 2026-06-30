@@ -30,10 +30,10 @@ class SellerRegisterRequest extends FormRequest
 
             // 3. حقول "إضافية" فقط لبائع الجملة (Wholesale)
             'tax_number' => [
-                'nullable',                      // يسمح بأن يكون فارغاً (مهم جداً)
-                'prohibited_if:role,vendor',     // يمنع وجوده نهائياً في الـ Body إذا كان بائع عادي
-                'required_if:role,wholesale',    // يفرضه إذا كان بائع جملة
-                'exclude_if:role,vendor',        // يحذفه من المصفوفة المفلترة للأمان
+                'nullable',
+                'prohibited_if:role,vendor',
+                'required_if:role,wholesale',
+                'exclude_if:role,vendor',
                 'digits:12'
             ],
 
@@ -55,15 +55,8 @@ class SellerRegisterRequest extends FormRequest
                 'mimes:jpeg,png,jpg',
                 'max:2048'
             ],
-            // 4. المالية (معلقة حالياً بناءً على طلبك)
-            /*
-            'payout_method' => 'required|in:wallet,cash',
-            'payout_account' => [...],
-            'wallet_pin' => 'required|digits:4|confirmed',
-            */
         ];
     }
-
 
     public function messages(): array
     {
@@ -73,7 +66,7 @@ class SellerRegisterRequest extends FormRequest
             'commercial_registration_number.required_if' => 'The commercial registration number is required for wholesale sellers.',
             'commercial_record_photo.required_if' => 'The commercial record photo is required for wholesale sellers.',
 
-            // Prohibited fields for Vendor (The logic you requested)
+            // Prohibited fields for Vendor
             'tax_number.prohibited' => 'The tax number is only allowed for wholesale accounts.',
             'commercial_registration_number.prohibited' => 'The commercial registration number is only allowed for wholesale accounts.',
             'commercial_record_photo.prohibited' => 'The commercial record photo is only allowed for wholesale accounts.',

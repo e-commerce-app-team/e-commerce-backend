@@ -17,16 +17,25 @@ class UserController extends Controller
     public function login(Request $request)
     {
         // 1. التحقق من صحة البيانات المدخلة
-        $credentials = $request->validate([
-            'email' => 'required|email',
-            'password' => 'required',
+        $request->validate([
+            'login' => 'required|string', // login = email OR phone
+            'password' => 'required|string',
         ]);
 
-        // 2. محاولة تسجيل الدخول
+        // 2. تحديد نوع المدخل (إيميل أم موبايل)
+        $login = $request->login;
+        $field = filter_var($login, FILTER_VALIDATE_EMAIL) ? 'email' : 'phone';
+
+        // 3. محاولة تسجيل الدخول
+        $credentials = [
+            $field => $login,
+            'password' => $request->password,
+        ];
+
         if (Auth::attempt($credentials)) {
             $user = Auth::user();
 
-            // 3. التحقق من حالة الحساب (Status Check)
+            // 4. التحقق من حالة الحساب (Status Check)
             if ($user->status !== 'approved') {
 
                 // تحديد رسالة الخطأ بناءً على الحالة
@@ -45,48 +54,46 @@ class UserController extends Controller
                 return response()->json([
                     'success' => false,
                     'message' => $message
-                ], 403); // 403 Forbidden
+                ], 403);
             }
 
-            // 4. التوجيه وتوليد التوكن بناءً على الرتبة (User Role)
+            // 5. التوجيه وتوليد التوكن بناءً على الرتبة (User Role)
             $redirectTo = '';
             $roleMessage = '';
-            $token = null; // القيمة الافتراضية للتوكن
+            $token = null;
 
             switch ($user->role) {
                 case 'vendor':
                     $redirectTo = '/vendor/home';
                     $roleMessage = 'Welcome back, Vendor!';
-                    // توليد توكن فقط للبائع
                     $token = $user->createToken('auth_token')->plainTextToken;
                     break;
 
                 case 'wholesale':
                     $redirectTo = '/wholesale/home';
                     $roleMessage = 'Welcome back, Wholesale Vendor!';
-                    // توليد توكن فقط للبائع بالجملة
                     $token = $user->createToken('auth_token')->plainTextToken;
                     break;
 
                 default:
                     $redirectTo = '/home';
                     $roleMessage = 'Welcome back, Buyer!';
-                    // المشتري لا يتم توليد توكن له هنا (لأنه استلمه عند الـ register)
                     $token = null;
                     break;
             }
 
-            // 5. إرسال الرد النهائي
+            // 6. إرسال الرد النهائي
             return response()->json([
                 'success' => true,
                 'message' => $roleMessage,
-                'access_token' => $token, // سيكون null في حال كان المشتري هو من سجل دخوله
+                'access_token' => $token,
                 'token_type' => 'Bearer',
                 'redirect_to' => $redirectTo,
                 'user' => [
                     'id' => $user->id,
                     'name' => $user->first_name . ' ' . $user->last_name,
                     'email' => $user->email,
+                    'phone' => $user->phone,
                     'role' => $user->role,
                     'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
                 ]
@@ -96,7 +103,7 @@ class UserController extends Controller
         // في حال فشل بيانات تسجيل الدخول
         return response()->json([
             'success' => false,
-            'message' => 'Invalid email or password.'
+            'message' => 'Invalid email/phone or password.'
         ], 401);
     }
 
