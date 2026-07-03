@@ -1,4 +1,5 @@
 <?php
+use App\Http\Controllers\AdController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\CategoryController;
@@ -105,6 +106,80 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('wholesale/invoices', [InvoiceController::class, 'getInvoices'])->middleware('auth:sanctum');
     Route::get('wholesale/reports/vat', [InvoiceController::class, 'getVatReport'])->middleware('auth:sanctum');
 
+
+
+
+
+
+
+    // 🔥 Routes خاصة بالتاجر (بدون middleware)
+    Route::post('vendor/coupons/store', [UserController::class, 'store'])->middleware('auth:sanctum');
+    Route::get('vendor/coupons/index', [UserController::class, 'index'])->middleware('auth:sanctum');
+    Route::get('vendor/coupons/{id}/show', [UserController::class, 'show'])->middleware('auth:sanctum');
+    Route::put('vendor/coupons/{id}/update', [UserController::class, 'update'])->middleware('auth:sanctum');
+    Route::patch('vendor/coupons/{id}/toggle', [UserController::class, 'toggle'])->middleware('auth:sanctum');
+    Route::delete('vendor/coupons/{id}/destroy', [UserController::class, 'destroy'])->middleware('auth:sanctum');
+    Route::get('vendor/coupons/{id}/stats', [UserController::class, 'stats'])->middleware('auth:sanctum');
+
+    // 🔥 Routes للمشتري (بدون middleware)
+    Route::get('coupons/available', [UserController::class, 'getAvailableForBuyer'])->middleware('auth:sanctum');
+    Route::post('coupons/validate', [UserController::class, 'validateCoupon'])->middleware('auth:sanctum');
+
+
+
+
+
+
+    // 📌 Routes العامة (لا تحتاج تسجيل دخول)
+// ============================================================
+    Route::get('ads/active', [AdController::class, 'getActiveAds']);
+    Route::get('ads/banners', [AdController::class, 'getBanners']);
+    Route::get('ads/promoted', [AdController::class, 'getPromotedProducts']);
+    Route::get('ads/featured-stores', [AdController::class, 'getFeaturedStores']);
+
+    // 📌 Routes للمستخدمين المسجلين (تتبع المشاهدات والنقرات)
+// ============================================================
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('ads/{adId}/view', [AdController::class, 'trackView']);
+        Route::get('ads/{adId}/click', [AdController::class, 'trackClick']);
+    });
+
+    // 📌 Routes للتاجر (Vendor / Wholesale)
+// ============================================================
+    Route::middleware('auth:sanctum')->group(function () {
+
+        // 📌 أنواع الإعلانات والأسعار
+        Route::get('ads/types', [UserController::class, 'getAdTypes']);
+        // 📌 عرض إعلانات التاجر مع فلترة
+        Route::get('ads/indexAd', [UserController::class, 'indexAd']);
+        // 📌 إنشاء طلب إعلان جديد
+        Route::post('ads/storeAd', [UserController::class, 'storeAd']);
+        // 📌 عرض إعلان محدد
+        Route::get('ads/{id}/showAd', [UserController::class, 'showAd']);
+        // 📌 تحديث إعلان (قبل الموافقة)
+        Route::put('ads/{id}/updateAd', [UserController::class, 'updateAd']);
+        // 📌 حذف إعلان (pending/rejected فقط)
+        Route::delete('ads/{id}/destroyAd', [UserController::class, 'destroyAd']);
+        // 📌 Dashboard إحصائيات الإعلانات
+        Route::get('ads/dashboard/stats', [UserController::class, 'dashboard']);
+    });
+
+
+    // 📌 Routes للأدمن (Admin)
+// ============================================================
+
+    // إدارة الإعلانات
+    Route::get('ads/index', [AdminController::class, 'index'])->middleware(['auth:sanctum', 'super_admin']);
+
+    Route::get('ads/{id}/show', [AdminController::class, 'show'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::post('ads/{id}/approve', [AdminController::class, 'approveAd'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::post('ads/{id}/reject', [AdminController::class, 'rejectAd'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::post('ads/{id}/deactivate', [AdminController::class, 'deactivateAd'])->middleware(['auth:sanctum', 'super_admin']);
+
+    // إحصائيات الإعلانات
+    Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'super_admin']);
 });
+
+
 
 

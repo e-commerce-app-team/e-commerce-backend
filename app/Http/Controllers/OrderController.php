@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Coupon;
+use App\Models\CouponUsage;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Transaction;
@@ -12,87 +14,100 @@ use Carbon\Carbon;
 class OrderController extends Controller
 {
 
-    /*     public function store(Request $request)
-        {
-            $buyer = auth()->user();
 
-            // 1. التحقق من البيانات القادمة (مصفوفة المنتجات وكمياتها فقط)
-            $request->validate([
-                'seller_id' => [
-                    'required',
-                    \Illuminate\Validation\Rule::exists('users', 'id')->where(function ($query) {
-                        $query->whereIn('role', ['vendor', 'wholesale']);
-                    }),
-                ],
-                'items' => 'required|array|min:1',
-                'items.*.product_id' => 'required|exists:products,id',
-                'items.*.quantity' => 'required|integer|min:1',
-            ]);
-
-            // 2. حساب الأسعار وتجهيز البيانات برمجياً من قاعدة البيانات
-            $calculatedTotalPrice = 0;
-            $validatedItems = [];
-
-            foreach ($request->input('items') as $item) {
-                $product = Product::find($item['product_id']);
-
-                if ($product) {
-                    // التحقق إذا كان المنتج عليه عرض (offer_price) متاح، نأخذ سعر العرض، وإلا السعر الأصلي
-                    $currentPrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
-                        ? $product->offer_price
-                        : $product->original_price;
-
-                    // حساب السعر الإجمالي لهذا العنصر (السعر * الكمية)
-                    $itemTotalPrice = $currentPrice * $item['quantity'];
-
-                    // إضافة السعر الإجمالي للعنصر إلى إجمالي الفاتورة العام
-                    $calculatedTotalPrice += $itemTotalPrice;
-
-                    // تخزين البيانات الجاهزة لاستخدامها في الحفظ
-                    $validatedItems[] = [
-                        'product' => $product,
-                        'quantity' => $item['quantity'],
-                        'price' => $currentPrice
-                    ];
-                }
-            }
-
-            // 3. إنشاء الطلب الأساسي بحالة pending (السعر محسوب من السيرفر حصراً)
-            $order = Order::create([
-                'user_id' => $buyer->id,
-                'seller_id' => $request->seller_id,
-                'total_price' => $calculatedTotalPrice,
-                'status' => 'pending',
-            ]);
-
-            // 4. تجهيز مصفوفة البيانات للحفظ في الجدول الوسيط (Many-to-Many)
-            $syncData = [];
-            foreach ($validatedItems as $validatedItem) {
-                $syncData[$validatedItem['product']->id] = [
-                    'quantity' => $validatedItem['quantity'],
-                    'price' => $validatedItem['price'] // السعر الحقيقي للمنتج وقت الشراء
-                ];
-            }
-
-            // 5. حفظ كافة المنتجات المرتبطة بهذا الطلب دفعة واحدة في الجدول الوسيط order_product
-            $order->products()->attach($syncData);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Order created successfully and items linked to pivot table.',
-                'order_id' => $order->id,
-                'total_calculated_price' => $calculatedTotalPrice
-            ], 201);
-        } */
-
-
-
-    /**
-     * 1. إنشاء طلب جديد وحجز المبلغ في الضمان (Escrow)
-     */
 
     // 1. إنشاء الطلب (يبقى pending وبدون تغيير جوهري)
 // ==========================================
+    /*   public function store(Request $request)
+      {
+          $buyer = auth()->user();
+
+          $request->validate([
+              'seller_id' => [
+                  'required',
+                  Rule::exists('users', 'id')->where(function ($query) {
+                      $query->whereIn('role', ['vendor', 'wholesale']);
+                  }),
+              ],
+              'items' => 'required|array|min:1',
+              'items.*.product_id' => 'required|exists:products,id',
+              'items.*.quantity' => 'required|integer|min:1',
+              'shipping_address_title' => 'nullable|string|max:255',
+              'shipping_address_details' => 'required|string',
+              'customer_notes' => 'nullable|string',
+              'payment_method' => 'nullable|string'
+          ]);
+
+          $calculatedSubtotal = 0;
+          $calculatedTotalPrice = 0;
+          $validatedItems = [];
+          $vatRate = 0.15;
+
+          foreach ($request->input('items') as $item) {
+              $product = Product::find($item['product_id']);
+              if ($product) {
+                  $basePrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
+                      ? $product->offer_price
+                      : $product->original_price;
+
+                  $itemSubtotal = $basePrice * $item['quantity'];
+                  $calculatedSubtotal += $itemSubtotal;
+
+                  $priceWithVat = $basePrice * (1 + $vatRate);
+                  $itemTotalPrice = $priceWithVat * $item['quantity'];
+                  $calculatedTotalPrice += $itemTotalPrice;
+
+                  $validatedItems[] = [
+                      'product' => $product,
+                      'quantity' => $item['quantity'],
+                      'price' => $priceWithVat
+                  ];
+              }
+          }
+
+          $totalVatAmount = $calculatedTotalPrice - $calculatedSubtotal;
+
+          $order = Order::create([
+              'user_id' => $buyer->id,
+              'seller_id' => $request->seller_id,
+              'total_price' => round($calculatedTotalPrice, 2),
+              'status' => 'pending',
+              'payment_status' => 'unpaid', // تبدأ غير مدفوعة
+              'payment_method' => $request->input('payment_method', 'wallet'),
+              'shipping_address_title' => $request->shipping_address_title,
+              'shipping_address_details' => $request->shipping_address_details,
+              'customer_notes' => $request->customer_notes,
+              'status_timeline' => [
+                  [
+                      'status' => 'pending',
+                      'title' => 'تم استلام الطلب بنجاح وهو قيد الانتظار وبانتظار الدفع',
+                      'time' => now()->toDateTimeString()
+                  ]
+              ]
+          ]);
+
+          $syncData = [];
+          foreach ($validatedItems as $validatedItem) {
+              $syncData[$validatedItem['product']->id] = [
+                  'quantity' => $validatedItem['quantity'],
+                  'price' => round($validatedItem['price'], 2)
+              ];
+              $validatedItem['product']->increment('sales_count', $validatedItem['quantity']);
+          }
+          $order->products()->attach($syncData);
+
+          return response()->json([
+              'success' => true,
+              'message' => 'Order created successfully. Please proceed to payment.',
+              'order_id' => $order->id,
+              'order_status' => 'pending',
+              'pricing_details' => [
+                  'subtotal_before_vat' => round($calculatedSubtotal, 2),
+                  'vat_amount' => round($totalVatAmount, 2),
+                  'total_after_vat' => round($calculatedTotalPrice, 2)
+              ]
+          ], 201);
+      } */
     public function store(Request $request)
     {
         $buyer = auth()->user();
@@ -110,17 +125,20 @@ class OrderController extends Controller
             'shipping_address_title' => 'nullable|string|max:255',
             'shipping_address_details' => 'required|string',
             'customer_notes' => 'nullable|string',
-            'payment_method' => 'nullable|string'
+            'payment_method' => 'nullable|string',
+            'coupon_code' => 'nullable|string|exists:coupons,code'
         ]);
 
         $calculatedSubtotal = 0;
         $calculatedTotalPrice = 0;
         $validatedItems = [];
         $vatRate = 0.15;
+        $productIds = [];
 
         foreach ($request->input('items') as $item) {
             $product = Product::find($item['product_id']);
             if ($product) {
+                $productIds[] = $product->id;
                 $basePrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
                     ? $product->offer_price
                     : $product->original_price;
@@ -142,16 +160,89 @@ class OrderController extends Controller
 
         $totalVatAmount = $calculatedTotalPrice - $calculatedSubtotal;
 
+        // 🔥 معالجة الكوبون مع تشخيص
+        $couponId = null;
+        $discountAmount = 0;
+        $finalPrice = $calculatedTotalPrice;
+
+        if ($request->filled('coupon_code')) {
+            $coupon = Coupon::where('code', strtoupper($request->coupon_code))->first();
+
+            if ($coupon) {
+                // 🔥 التحقق من صلاحية الكوبون
+                $validation = $coupon->isValid(
+                    $buyer->id,
+                    $calculatedTotalPrice,
+                    $productIds
+                );
+
+                // 🔥🔥🔥 كود التشخيص: إذا الكوبون مش صالح، يرجع رسالة توضح السبب
+                if (!$validation['valid']) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Coupon validation failed: ' . $validation['message'],
+                        'debug' => [
+                            'coupon' => [
+                                'id' => $coupon->id,
+                                'code' => $coupon->code,
+                                'is_active' => $coupon->is_active,
+                                'starts_at' => $coupon->starts_at,
+                                'expires_at' => $coupon->expires_at,
+                                'min_order_amount' => $coupon->min_order_amount,
+                                'max_uses' => $coupon->max_uses,
+                                'used_count' => $coupon->used_count,
+                                'usage_limit_per_user' => $coupon->usage_limit_per_user,
+                                'apply_to_all_products' => $coupon->apply_to_all_products,
+                                'product_ids' => $coupon->product_ids,
+                            ],
+                            'order_total' => $calculatedTotalPrice,
+                            'product_ids_in_cart' => $productIds,
+                            'validation_message' => $validation['message']
+                        ]
+                    ], 400);
+                }
+
+                // ✅ إذا الكوبون صالح، نحسب الخصم
+                if ($validation['valid']) {
+                    $discountAmount = $coupon->calculateDiscount($calculatedTotalPrice);
+                    $finalPrice = $calculatedTotalPrice - $discountAmount;
+                    $couponId = $coupon->id;
+
+                    // زيادة عداد الاستخدامات
+                    $coupon->increment('used_count');
+
+                    // تسجيل استخدام الكوبون
+                    CouponUsage::create([
+                        'coupon_id' => $coupon->id,
+                        'user_id' => $buyer->id,
+                        'order_id' => null,
+                        'discount_amount' => $discountAmount,
+                        'order_total_before_discount' => $calculatedTotalPrice,
+                        'order_total_after_discount' => $finalPrice
+                    ]);
+                }
+            } else {
+                // 🔥 إذا ما لقى الكوبون
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Coupon not found: ' . $request->coupon_code
+                ], 404);
+            }
+        }
+
+        // إنشاء الطلب
         $order = Order::create([
             'user_id' => $buyer->id,
             'seller_id' => $request->seller_id,
-            'total_price' => round($calculatedTotalPrice, 2),
+            'total_price' => round($finalPrice, 2),
             'status' => 'pending',
-            'payment_status' => 'unpaid', // تبدأ غير مدفوعة
+            'payment_status' => 'unpaid',
             'payment_method' => $request->input('payment_method', 'wallet'),
             'shipping_address_title' => $request->shipping_address_title,
             'shipping_address_details' => $request->shipping_address_details,
             'customer_notes' => $request->customer_notes,
+            'coupon_id' => $couponId,
+            'discount_amount' => round($discountAmount, 2),
             'status_timeline' => [
                 [
                     'status' => 'pending',
@@ -160,6 +251,16 @@ class OrderController extends Controller
                 ]
             ]
         ]);
+
+        // تحديث order_id في سجل استخدام الكوبون
+        if ($couponId) {
+            CouponUsage::where('coupon_id', $couponId)
+                ->where('user_id', $buyer->id)
+                ->whereNull('order_id')
+                ->latest()
+                ->first()
+                    ?->update(['order_id' => $order->id]);
+        }
 
         $syncData = [];
         foreach ($validatedItems as $validatedItem) {
@@ -179,7 +280,9 @@ class OrderController extends Controller
             'pricing_details' => [
                 'subtotal_before_vat' => round($calculatedSubtotal, 2),
                 'vat_amount' => round($totalVatAmount, 2),
-                'total_after_vat' => round($calculatedTotalPrice, 2)
+                'total_before_discount' => round($calculatedTotalPrice, 2),
+                'discount_amount' => round($discountAmount, 2),
+                'total_after_discount' => round($finalPrice, 2)
             ]
         ], 201);
     }
@@ -227,9 +330,49 @@ class OrderController extends Controller
     /**
      * 3. جلب تفاصيل الطلب الكاملة (محمي: للمشتري أو البائع الفعلي للطلب فقط)
      */
+    /*  public function show($id)
+     {
+         $order = Order::with(['buyer:id,first_name,last_name,email,phone', 'products'])
+             ->where(function ($query) {
+                 $query->where('user_id', auth()->id())
+                     ->orWhere('seller_id', auth()->id());
+             })
+             ->findOrFail($id);
+
+         return response()->json([
+             'success' => true,
+             'data' => [
+                 'order_id' => $order->id,
+                 'date_time' => $order->created_at->toDateTimeString(),
+                 'total_price' => $order->total_price,
+                 'status' => $order->status,
+                 'payment_status' => $order->payment_status,
+                 'payment_method' => $order->payment_method,
+                 'shipping' => [
+                     'title' => $order->shipping_address_title,
+                     'details' => $order->shipping_address_details,
+                 ],
+                 'buyer' => $order->buyer,
+                 'products' => $order->products->map(function ($product) {
+                     return [
+                         'id' => $product->id,
+                         'name' => $product->name,
+                         'quantity' => $product->pivot->quantity,
+                         'price' => $product->pivot->price,
+                     ];
+                 }),
+                 'timeline' => $order->status_timeline,
+                 'customer_notes' => $order->customer_notes
+             ]
+         ]);
+     } */
     public function show($id)
     {
-        $order = Order::with(['buyer:id,first_name,last_name,email,phone', 'products'])
+        $order = Order::with([
+            'buyer:id,first_name,last_name,email,phone',
+            'products',
+            'coupon' // 🔥 إضافة علاقة الكوبون
+        ])
             ->where(function ($query) {
                 $query->where('user_id', auth()->id())
                     ->orWhere('seller_id', auth()->id());
@@ -258,6 +401,14 @@ class OrderController extends Controller
                         'price' => $product->pivot->price,
                     ];
                 }),
+                // 🔥 إضافة معلومات الكوبون
+                'coupon' => $order->coupon ? [
+                    'code' => $order->coupon->code,
+                    'title' => $order->coupon->title,
+                    'type' => $order->coupon->type,
+                    'value' => $order->coupon->value,
+                ] : null,
+                'discount_amount' => $order->discount_amount ?? 0,
                 'timeline' => $order->status_timeline,
                 'customer_notes' => $order->customer_notes
             ]
@@ -444,203 +595,6 @@ class OrderController extends Controller
     }
 
 
-    //
-    //  * 1. قبول الطلب (التحقق من المخزون وتحويل الحالة إلى جاري التجهيز)
-    /*
- /*   public function acceptOrder(Request $request)
-   {
-       $request->validate([
-           'order_id' => 'required|exists:orders,id'
-       ]);
-
-       // جلب الطلب مع المنتجات المرتبطة به
-       $order = Order::with('products')->where('id', $request->order_id)
-           ->where('seller_id', auth()->id())
-           ->where('status', 'pending')
-           ->firstOrFail();
-
-       // بيئة Transaction لضمان تنفيذ العمليات معاً أو إلغائها في حال حدوث خطأ
-       DB::beginTransaction();
-       try {
-           // التحقق من أن المخزون كافٍ لجميع المنتجات في الطلب
-           foreach ($order->products as $product) {
-               $requestedQuantity = $product->pivot->quantity; // الكمية المطلوبة بالطلب
-
-               if ($product->stock < $requestedQuantity) {
-                   return response()->json([
-                       'success' => false,
-                       'message' => "لا يمكن قبول الطلب، المخزون غير كافٍ للمنتج: {$product->name}"
-                   ], 400);
-               }
-           }
-
-           // خصم الكمية من المخزون وتحديث حالة الطلب
-           foreach ($order->products as $product) {
-               $product->decrement('stock', $product->pivot->quantity);
-           }
-
-           $timeline = $order->status_timeline ?? [];
-           $timeline[] = [
-               'status' => 'processing',
-               'title' => 'تم التأكد من المخزون وقبول الطلب، وهو الآن جاري التجهيز',
-               'time' => now()->toDateTimeString()
-           ];
-
-           $order->update([
-               'status' => 'processing',
-               'status_timeline' => $timeline
-           ]);
-
-           DB::commit();
-
-           return response()->json([
-               'success' => true,
-               'message' => 'تم التحقق من المخزون، وتثبيت خصم الكميات، وقبول الطلب بنجاح.',
-               'order_status' => $order->status
-           ]);
-
-       } catch (\Exception $e) {
-           DB::rollBack();
-           return response()->json(['success' => false, 'message' => 'حدث خطأ غير متوقع أثناء معالجة الطلب'], 500);
-       }
-   }
-
-   /**
-    * 2. رفض الطلب (إرجاع المال للمشتري وتوثيق السبب)
-    */
-    /* public function rejectOrder(Request $request)
-     {
-         $request->validate([
-             'order_id' => 'required|exists:orders,id',
-             'rejection_reason' => 'required|string|max:500'
-         ]);
-
-         $order = Order::with('products')->where('id', $request->order_id)
-             ->where('seller_id', auth()->id())
-             ->whereIn('status', ['pending', 'processing']) 
-             ->firstOrFail();
-
-         DB::beginTransaction();
-         try {
-             if ($order->status === 'processing') {
-                 foreach ($order->products as $product) {
-                     $product->increment('stock', $product->pivot->quantity);
-                 }
-             }
-
-             $timeline = $order->status_timeline ?? [];
-             $timeline[] = [
-                 'status' => 'cancelled',
-                 'title' => 'تم رفض الطلب من قبل التاجر وإعادة الأموال للمشتري',
-                 'reason' => $request->rejection_reason,
-                 'time' => now()->toDateTimeString()
-             ];
-
-             // التعديل هنا: التحديث المباشر عبر الكلاس لمنع خطأ stdClass
-             Order::where('id', $order->id)->update([
-                 'status' => 'cancelled',
-                 'payment_status' => 'escrow_refunded', 
-                 'status_timeline' => $timeline
-             ]);
-
-             DB::commit();
-
-             return response()->json([
-                 'success' => true,
-                 'message' => 'تم رفض الطلب بنجاح، إرجاع الكميات للمخزن، وتحويل الأموال للمشتري.',
-                 'rejection_reason' => $request->rejection_reason
-             ]);
-
-         } catch (\Exception $e) {
-             DB::rollBack();
-             return response()->json(['success' => false, 'message' => 'حدث خطأ أثناء إلغاء الطلب'], 500);
-         }
-     } */
-
-    /**
-     * 3. تعديل وقت التجهيز المتوقع وإرسال إشعار بالتأخير
-     */
-    /*    public function updatePreparationTime(Request $request)
-       {
-           $request->validate([
-               'order_id' => 'required|exists:orders,id',
-               'estimated_delivery_date' => 'required|date|after:now',
-               'delay_notice_message' => 'nullable|string|max:500'
-           ]);
-
-           $order = Order::where('id', $request->order_id)
-               ->where('seller_id', auth()->id())
-               ->where('status', 'processing')
-               ->firstOrFail();
-
-           $timeline = $order->status_timeline ?? [];
-           $notice = $request->delay_notice_message ?? 'تنبيه: تم تعديل الموعد المتوقع لتجهيز طلبكم شحنه.';
-
-           $timeline[] = [
-               'status' => 'delay_notice',
-               'title' => 'إشعار بتعديل موعد الشحن والتسليم المتوقع',
-               'note' => $notice,
-               'new_date' => $request->estimated_delivery_date,
-               'time' => now()->toDateTimeString()
-           ];
-
-           $order->update([
-               'estimated_delivery_date' => $request->estimated_delivery_date,
-               'status_timeline' => $timeline
-           ]);
-
-           // فكرة الإشعار: نرسل إشعار عبر نظام الإشعارات في لارافيل للمشتري
-           // Notification::send($order->buyer, new OrderDelayNotification($order, $notice));
-
-           return response()->json([
-               'success' => true,
-               'message' => 'تم تحديث الوقت المتوقع بنجاح وحفظ سجل الإشعار بالتأخير.',
-               'new_estimated_date' => $request->estimated_delivery_date
-           ]);
-       } */
-
-    /**
-     * 4. تأكيد تجهيز الطلب بالكامل وطباعة بيان الشحن
-     */
-    /* public function readyForShipping(Request $request)
-    {
-        $request->validate([
-            'order_id' => 'required|exists:orders,id'
-        ]);
-
-        $order = Order::with(['buyer', 'products'])->where('id', $request->order_id)
-            ->where('seller_id', auth()->id())
-            ->where('status', 'processing')
-            ->firstOrFail();
-
-        $timeline = $order->status_timeline ?? [];
-        $timeline[] = [
-            'status' => 'ready',
-            'title' => 'اكتمل التجهيز، الطلب بانتظار شركة الشحن لاستلامه بنجاح',
-            'time' => now()->toDateTimeString()
-        ];
-
-        $order->update([
-            'status' => 'shipped', 
-            'status_timeline' => $timeline
-        ]);
-
-        // بيان الشحن الجاهز للطباعة
-        $shippingManifest = [
-            'invoice_number' => 'SHP-' . $order->id . '-' . now()->format('ymd'),
-            'seller_name' => auth()->user()->first_name . ' ' . auth()->user()->last_name,
-            'buyer_name' => $order->buyer ? $order->buyer->first_name . ' ' . $order->buyer->last_name : 'N/A',
-            'shipping_address' => $order->shipping_address_details ?? 'العنوان الافتراضي المسجل في الطلب',
-            'total_amount' => $order->total_price . ' SAR',
-            'items_count' => $order->products->sum('pivot.quantity'),
-        ];
-
-        return response()->json([
-            'success' => true,
-            'message' => 'تم تأكيد جاهزية الطلب، وإصدار بيان الشحن للطباعة.',
-            'shipping_manifest' => $shippingManifest
-        ]);
-    } */
 
 
     /**
@@ -706,18 +660,8 @@ class OrderController extends Controller
         }
     }
     /**
-     * 2. رفض الطلب (إرجاع المال للمشتري وتوثيق السبب)
-     */
-    /**
-     * 2. رفض الطلب (إرجاع المال للمشتري وتوثيق السبب)
-     */
-    /**
-     * 2. رفض الطلب (إرجاع المال للمشتري وتوثيق السبب)
-     */
-    /**
-     * 2. رفض الطلب (إرجاع المال للمشتري، استرداد المخزون، وخصم عداد المبيعات)
-     */
-    /**
+
+
      * 2. رفض الطلب (إرجاع المال للمشتري، استرداد المخزون، وخصم عداد المبيعات)
      */
     public function rejectOrder(Request $request)
@@ -883,29 +827,70 @@ class OrderController extends Controller
         ]);
     }
 
+    /*    public function myOrders(Request $request)
+       {
+           $user = auth()->user();
+
+           $query = Order::with([
+               'buyer:id,first_name,last_name,email,phone',
+               'products'
+           ]);
+
+           if (in_array($user->role, ['vendor', 'wholesale'])) {
+               // ✅ البائع: يشوف كل الطلبات اللي وردته (كل المشترين)
+               $query->where('seller_id', $user->id);
+           } else {
+               // ✅ المشتري: يشوف كل طلباته (من كل البائعين)
+               $query->where('user_id', $user->id);
+           }
+
+           // 📌 فلترة حسب الحالة (اختياري) - للكل
+           if ($request->has('status')) {
+               $query->where('status', $request->status);
+           }
+
+           // 📌 فلترة حسب التاريخ (اختياري)
+           if ($request->has('from_date')) {
+               $query->whereDate('created_at', '>=', $request->from_date);
+           }
+           if ($request->has('to_date')) {
+               $query->whereDate('created_at', '<=', $request->to_date);
+           }
+
+           $orders = $query->latest()->paginate($request->input('per_page', 15));
+
+           // 📌 إضافة بيانات إضافية لكل طلبية
+           $orders->getCollection()->transform(function ($order) {
+               $order->total_items = $order->products->sum('pivot.quantity');
+               return $order;
+           });
+
+           return response()->json([
+               'success' => true,
+               'data' => $orders
+           ], 200);
+       } */
+
     public function myOrders(Request $request)
     {
         $user = auth()->user();
 
         $query = Order::with([
             'buyer:id,first_name,last_name,email,phone',
-            'products'
+            'products',
+            'coupon' // 🔥 إضافة علاقة الكوبون
         ]);
 
         if (in_array($user->role, ['vendor', 'wholesale'])) {
-            // ✅ البائع: يشوف كل الطلبات اللي وردته (كل المشترين)
             $query->where('seller_id', $user->id);
         } else {
-            // ✅ المشتري: يشوف كل طلباته (من كل البائعين)
             $query->where('user_id', $user->id);
         }
 
-        // 📌 فلترة حسب الحالة (اختياري) - للكل
         if ($request->has('status')) {
             $query->where('status', $request->status);
         }
 
-        // 📌 فلترة حسب التاريخ (اختياري)
         if ($request->has('from_date')) {
             $query->whereDate('created_at', '>=', $request->from_date);
         }
@@ -915,9 +900,11 @@ class OrderController extends Controller
 
         $orders = $query->latest()->paginate($request->input('per_page', 15));
 
-        // 📌 إضافة بيانات إضافية لكل طلبية
         $orders->getCollection()->transform(function ($order) {
             $order->total_items = $order->products->sum('pivot.quantity');
+            // 🔥 إضافة الخصم للعرض
+            $order->discount_amount = $order->discount_amount ?? 0;
+            $order->final_price = $order->total_price;
             return $order;
         });
 

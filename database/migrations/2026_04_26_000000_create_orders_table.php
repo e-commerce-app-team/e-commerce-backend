@@ -55,6 +55,10 @@ return new class extends Migration {
             $table->timestamp('delivered_at')->nullable();        // وقت الاستلام الفعلي (سواء ضغط زر المشتري أو تلقائي)
             $table->dateTime('estimated_delivery_date')->nullable(); // وقت التسليم المتوقع
 
+            // 🔥 حقول الكوبونات (المضافة حديثاً)
+            $table->foreignId('coupon_id')->nullable()->constrained('coupons')->nullOnDelete();
+            $table->decimal('discount_amount', 10, 2)->default(0);
+
             // 6. الـ Timeline الزمني لحفظ تتبع مراحل الطلب (مصفوفة JSON)
             $table->json('status_timeline')->nullable();
 

@@ -6,16 +6,18 @@ use Illuminate\Database\Eloquent\Model;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-class Admin extends Model
-{
 
+class Admin extends Authenticatable
+{
     use HasApiTokens, Notifiable;
+
     protected $fillable = [
         'first_name',
         'last_name',
-        'phone',           // أضفنا الإيميل بدل الهاتف حسب طلبك
+        'phone',
         'password',
-        'profile_photo',   // تأكدي من تسميته profile_photo وليس profile_picture
+        'profile_photo',
+        'role', // super_admin, users_admin, orders_admin, products_admin
     ];
 
     protected $hidden = [
@@ -25,4 +27,77 @@ class Admin extends Model
     protected $casts = [
         'password' => 'hashed',
     ];
+
+    // ============================================================
+    // 🔥 العلاقات (للإحصائيات فقط)
+    // ============================================================
+
+    /**
+     * جلب جميع الإعلانات (للإحصائيات)
+     */
+    public function allAds()
+    {
+        return $this->hasMany(Ad::class, 'admin_id');
+    }
+
+    /**
+     * جلب الإعلانات المعلقة (قيد المراجعة)
+     */
+    public function pendingAds()
+    {
+        return $this->allAds()->where('status', 'pending');
+    }
+
+    /**
+     * جلب الإعلانات النشطة
+     */
+    public function activeAds()
+    {
+        return $this->allAds()->where('status', 'active');
+    }
+
+    /**
+     * جلب الإعلانات المرفوضة
+     */
+    public function rejectedAds()
+    {
+        return $this->allAds()->where('status', 'rejected');
+    }
+
+    /**
+     * جلب الإعلانات المنتهية
+     */
+    public function expiredAds()
+    {
+        return $this->allAds()->where('status', 'expired');
+    }
+
+    // ============================================================
+    // 📌 دوال مساعدة للصلاحيات
+    // ============================================================
+
+    public function isSuperAdmin()
+    {
+        return $this->role === 'super_admin';
+    }
+
+    public function isUsersAdmin()
+    {
+        return $this->role === 'users_admin';
+    }
+
+    public function isOrdersAdmin()
+    {
+        return $this->role === 'orders_admin';
+    }
+
+    public function isProductsAdmin()
+    {
+        return $this->role === 'products_admin';
+    }
+
+    public function canManageAds()
+    {
+        return in_array($this->role, ['super_admin', 'users_admin']);
+    }
 }

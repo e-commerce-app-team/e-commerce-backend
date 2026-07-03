@@ -6,11 +6,14 @@ use App\Http\Requests\BuyerRegisterRequest;
 use App\Http\Requests\SellerRegisterRequest;
 use App\Http\Requests\VendorRegisterRequest;
 use App\Http\Requests\WholesaleRegisterRequest;
+use App\Models\Ad;
+use App\Models\Coupon;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str; // 🔥 أضف هذا السطر
 
 class UserController extends Controller
 {
@@ -357,5 +360,716 @@ class UserController extends Controller
             ]
         ], 200);
     }
+
+
+    // 📌 1. عرض جميع كوبونات التاجر
+    // ============================================================
+    public function index()
+    {
+        // 🔥 شرط التحقق من أن المستخدم تاجر
+        $user = auth()->user();
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can view coupons.'
+            ], 403);
+        }
+
+        $coupons = Coupon::where('seller_id', $user->id)
+            ->latest()
+            ->paginate(20);
+
+        return response()->json([
+            'success' => true,
+            'data' => $coupons
+        ]);
+    }
+
+    // 📌 2. إنشاء كوبون جديد
+    // ============================================================
+    public function store(Request $request)
+    {
+        // 🔥 شرط التحقق من أن المستخدم تاجر
+        $user = auth()->user();
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can create coupons.'
+            ], 403);
+        }
+
+        $request->validate([
+            'title' => 'nullable|string|max:255',
+            'description' => 'nullable|string',
+            'type' => 'required|in:percentage,fixed,free_shipping',
+            'value' => 'required|numeric|min:0',
+            'min_order_amount' => 'nullable|numeric|min:0',
+            'max_uses' => 'nullable|integer|min:1',
+            'usage_limit_per_user' => 'required|in:unlimited,once',
+            'starts_at' => 'nullable|date|after_or_equal:today',
+            'expires_at' => 'nullable|date|after:starts_at',
+            'apply_to_all_products' => 'boolean',
+            'product_ids' => 'nullable|array|exists:products,id'
+        ]);
+
+        // توليد كود فريد
+        $code = $this->generateUniqueCode();
+
+        $coupon = Coupon::create([
+            'seller_id' => $user->id,
+            'code' => $code,
+            'title' => $request->title,
+            'description' => $request->description,
+            'type' => $request->type,
+            'value' => $request->value,
+            'min_order_amount' => $request->min_order_amount,
+            'max_uses' => $request->max_uses,
+            'usage_limit_per_user' => $request->usage_limit_per_user,
+            'starts_at' => $request->starts_at,
+            'expires_at' => $request->expires_at,
+            'apply_to_all_products' => $request->apply_to_all_products ?? true,
+            'product_ids' => $request->product_ids,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Coupon created successfully.',
+            'data' => $coupon,
+            'coupon_code' => $code
+        ], 201);
+    }
+
+    // 📌 3. عرض كوبون محدد
+    // ============================================================
+    public function show($id)
+    {
+        // 🔥 شرط التحقق من أن المستخدم تاجر
+        $user = auth()->user();
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can view coupons.'
+            ], 403);
+        }
+
+        $coupon = Coupon::where('seller_id', $user->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        return response()->json([
+            'success' => true,
+            'data' => $coupon
+        ]);
+    }
+
+    // 📌 4. تحديث كوبون
+    // ============================================================
+    public function update(Request $request, $id)
+    {
+        // 🔥 شرط التحقق من أن المستخدم تاجر
+        $user = auth()->user();
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can update coupons.'
+            ], 403);
+        }
+
+        $coupon = Coupon::where('seller_id', $user->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        $request->validate([
+            'title' => 'nullable|string|max:255',
+            'description' => 'nullable|string',
+            'type' => 'sometimes|in:percentage,fixed,free_shipping',
+            'value' => 'sometimes|numeric|min:0',
+            'min_order_amount' => 'nullable|numeric|min:0',
+            'max_uses' => 'nullable|integer|min:1',
+            'usage_limit_per_user' => 'sometimes|in:unlimited,once',
+            'starts_at' => 'nullable|date|after_or_equal:today',
+            'expires_at' => 'nullable|date|after:starts_at',
+            'apply_to_all_products' => 'boolean',
+            'product_ids' => 'nullable|array|exists:products,id'
+        ]);
+
+        $coupon->update($request->all());
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Coupon updated successfully.',
+            'data' => $coupon
+        ]);
+    }
+
+    // 📌 5. تفعيل/تعطيل كوبون
+    // ============================================================
+    public function toggle($id)
+    {
+        // 🔥 شرط التحقق من أن المستخدم تاجر
+        $user = auth()->user();
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can toggle coupons.'
+            ], 403);
+        }
+
+        $coupon = Coupon::where('seller_id', $user->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        $coupon->is_active = !$coupon->is_active;
+        $coupon->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => $coupon->is_active ? 'Coupon activated.' : 'Coupon deactivated.'
+        ]);
+    }
+
+    // 📌 6. حذف كوبون
+    // ============================================================
+    public function destroy($id)
+    {
+        // 🔥 شرط التحقق من أن المستخدم تاجر
+        $user = auth()->user();
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can delete coupons.'
+            ], 403);
+        }
+
+        $coupon = Coupon::where('seller_id', $user->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        $coupon->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Coupon deleted successfully.'
+        ]);
+    }
+
+    // 📌 7. عرض إحصائيات الكوبون
+    // ============================================================
+    public function stats($id)
+    {
+        // 🔥 شرط التحقق من أن المستخدم تاجر
+        $user = auth()->user();
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can view coupon stats.'
+            ], 403);
+        }
+
+        $coupon = Coupon::where('seller_id', $user->id)
+            ->where('id', $id)
+            ->with('usages')
+            ->firstOrFail();
+
+        $totalDiscount = $coupon->usages->sum('discount_amount');
+        $totalOrders = $coupon->usages->count();
+        $uniqueUsers = $coupon->usages->groupBy('user_id')->count();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'coupon' => $coupon,
+                'stats' => [
+                    'total_uses' => $totalOrders,
+                    'total_discount_given' => $totalDiscount,
+                    'unique_users' => $uniqueUsers,
+                    'remaining_uses' => $coupon->max_uses ? $coupon->max_uses - $coupon->used_count : 'Unlimited'
+                ]
+            ]
+        ]);
+    }
+
+
+
+    // 📌 8. عرض الكوبونات المتاحة للمشتري
+// ============================================================
+    public function getAvailableForBuyer()
+    {
+        $user = auth()->user();
+
+        // 🔥 شرط: المشتري أو التاجر (Vendor/Wholesale)
+        if (!in_array($user->role, ['buyer', 'vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized.'
+            ], 403);
+        }
+
+        // 🔥 جلب الكوبونات المفعلة فقط (is_active = 1)
+        $coupons = Coupon::where('apply_to_all_products', true)
+            ->where('is_active', 1)  // 🔥 فقط المفعلين
+            ->with('seller:id,first_name,last_name,store_name')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $coupons
+        ]);
+    }
+
+    // 📌 9. التحقق من صلاحية كوبون (للمشتري)
+// ============================================================
+    public function validateCoupon(Request $request)
+    {
+        $user = auth()->user();
+
+        // 🔥 شرط: المشتري أو التاجر (Vendor/Wholesale)
+        if (!in_array($user->role, ['buyer', 'vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized.'
+            ], 403);
+        }
+
+        $request->validate([
+            'code' => 'required|string',
+            'order_total' => 'required|numeric|min:0',
+            'product_ids' => 'nullable|array'
+        ]);
+
+        $code = strtoupper(trim($request->code));
+
+        $coupon = Coupon::where('code', $code)->first();
+
+        if (!$coupon) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid coupon code.'
+            ], 404);
+        }
+
+        // التحقق من الصلاحية
+        $validation = $coupon->isValid(
+            $user->id,
+            $request->order_total,
+            $request->product_ids ?? []
+        );
+
+        if (!$validation['valid']) {
+            return response()->json([
+                'success' => false,
+                'message' => $validation['message']
+            ], 400);
+        }
+
+        // حساب الخصم
+        $discountAmount = $coupon->calculateDiscount($request->order_total);
+
+        return response()->json([
+            'success' => true,
+            'coupon' => $coupon,
+            'discount_amount' => $discountAmount,
+            'final_total' => round($request->order_total - $discountAmount, 2)
+        ]);
+    }
+    // 📌 10. وظيفة مساعدة: توليد كود فريد
+    // ============================================================
+    private function generateUniqueCode()
+    {
+        $prefix = 'CPN-';
+        $code = $prefix . strtoupper(Str::random(8));
+
+        while (Coupon::where('code', $code)->exists()) {
+            $code = $prefix . strtoupper(Str::random(8));
+        }
+
+        return $code;
+    }
+
+
+    // 📌 1. عرض جميع إعلانات التاجر مع فلترة
+    // ============================================================
+    public function indexAd(Request $request)
+    {
+        $user = auth()->user();
+
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can manage ads.'
+            ], 403);
+        }
+
+        $query = Ad::forSeller($user->id);
+
+        // فلترة حسب الحالة
+        if ($request->has('status')) {
+            $status = $request->status;
+            if ($status === 'active') {
+                $query->active();
+            } elseif ($status === 'pending') {
+                $query->pending();
+            } elseif ($status === 'expired') {
+                $query->expired();
+            } elseif ($status === 'rejected') {
+                $query->where('status', 'rejected');
+            }
+        }
+
+        // فلترة حسب النوع
+        if ($request->has('type')) {
+            $query->byType($request->type);
+        }
+
+        $ads = $query->latest()->paginate(15);
+
+        return response()->json([
+            'success' => true,
+            'data' => $ads,
+            'filters' => [
+                'status' => $request->status,
+                'type' => $request->type,
+            ]
+        ]);
+    }
+
+    // 📌 2. الحصول على أنواع الإعلانات المتاحة مع الأسعار
+    // ============================================================
+    public function getAdTypes()
+    {
+        return response()->json([
+            'success' => true,
+            'types' => [
+                [
+                    'type' => 'banner',
+                    'label' => 'بانر رئيسي',
+                    'icon' => '📢',
+                    'description' => 'ظهور في أعلى الشاشة الرئيسية للمشترين',
+                    'location' => 'الشاشة الرئيسية',
+                    'price_per_day' => 3000,
+                    'prices' => [
+                        '1_day' => 3000,
+                        '3_days' => 8000,
+                        '1_week' => 15000,
+                        '1_month' => 50000,
+                    ]
+                ],
+                [
+                    'type' => 'promoted_product',
+                    'label' => 'منتج معزز',
+                    'icon' => '⭐',
+                    'description' => 'منتجك يظهر أول نتائج البحث والاستكشاف',
+                    'location' => 'نتائج البحث والاستكشاف',
+                    'price_per_day' => 3000,
+                    'prices' => [
+                        '1_day' => 3000,
+                        '3_days' => 8000,
+                        '1_week' => 15000,
+                        '1_month' => 50000,
+                    ]
+                ],
+                [
+                    'type' => 'featured_store',
+                    'label' => 'متجر مميز',
+                    'icon' => '🏪',
+                    'description' => 'متجرك يظهر في قسم "متاجر مميزة" للمشترين',
+                    'location' => 'قسم المتاجر المميزة',
+                    'price_per_day' => 4000,
+                    'prices' => [
+                        '1_day' => 4000,
+                        '3_days' => 10000,
+                        '1_week' => 20000,
+                        '1_month' => 60000,
+                    ]
+                ],
+                [
+                    'type' => 'paid_notification',
+                    'label' => 'إشعار مدفوع',
+                    'icon' => '🔔',
+                    'description' => 'إشعار يصل لجميع مستخدمي التطبيق مباشرة',
+                    'location' => 'إشعارات التطبيق',
+                    'price_per_day' => 15000,
+                    'prices' => [
+                        '1_day' => 15000,
+                        '3_days' => 40000,
+                        '1_week' => 80000,
+                        '1_month' => 250000,
+                    ]
+                ],
+            ]
+        ]);
+    }
+
+    // 📌 3. إنشاء طلب إعلان جديد
+    // ============================================================
+    public function storeAd(Request $request)
+    {
+        $user = auth()->user();
+
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only vendors can create ads.'
+            ], 403);
+        }
+
+        $request->validate([
+            'type' => 'required|in:banner,promoted_product,featured_store,paid_notification',
+            'title' => 'required|string|max:255',
+            'description' => 'nullable|string|max:500',
+            'image' => 'nullable|image|max:2048',
+            'link' => 'nullable|url',
+            'duration' => 'required|in:1_day,3_days,1_week,1_month',
+        ]);
+
+        // حساب السعر حسب المدة
+        $prices = [
+            '1_day' => $this->getPriceByType($request->type, '1_day'),
+            '3_days' => $this->getPriceByType($request->type, '3_days'),
+            '1_week' => $this->getPriceByType($request->type, '1_week'),
+            '1_month' => $this->getPriceByType($request->type, '1_month'),
+        ];
+
+        $price = $prices[$request->duration];
+
+        // حساب تواريخ البداية والنهاية
+        $startsAt = now();
+        $expiresAt = $this->calculateExpiryDate($request->duration);
+
+        // رفع الصورة
+        $imagePath = null;
+        if ($request->hasFile('image')) {
+            $imagePath = $request->file('image')->store('ads/images', 'public');
+        }
+
+        $ad = Ad::create([
+            'seller_id' => $user->id,
+            'type' => $request->type,
+            'title' => $request->title,
+            'description' => $request->description,
+            'image_url' => $imagePath,
+            'link' => $request->link,
+            'duration' => $request->duration,
+            'price' => $price,
+            'starts_at' => $startsAt,
+            'expires_at' => $expiresAt,
+            'status' => 'pending', // يبدأ قيد المراجعة
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Ad request submitted successfully. Waiting for admin approval.',
+            'data' => $ad,
+            'price_details' => [
+                'duration' => $ad->getDurationLabel(),
+                'price' => $price,
+                'starts_at' => $startsAt,
+                'expires_at' => $expiresAt,
+            ]
+        ], 201);
+    }
+
+    // 📌 4. عرض إعلان محدد
+    // ============================================================
+    public function showAd($id)
+    {
+        $user = auth()->user();
+
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized.'
+            ], 403);
+        }
+
+        $ad = Ad::forSeller($user->id)->with('views')->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $ad,
+            'stats' => [
+                'views_count' => $ad->views_count,
+                'clicks_count' => $ad->clicks_count,
+                'daily_views' => $this->getDailyViews($ad),
+            ]
+        ]);
+    }
+
+    // 📌 5. تحديث إعلان (قبل الموافقة)
+    // ============================================================
+    public function updateAd(Request $request, $id)
+    {
+        $user = auth()->user();
+
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized.'
+            ], 403);
+        }
+
+        $ad = Ad::forSeller($user->id)
+            ->where('status', 'pending')
+            ->findOrFail($id);
+
+        $request->validate([
+            'title' => 'sometimes|string|max:255',
+            'description' => 'nullable|string|max:500',
+            'image' => 'nullable|image|max:2048',
+            'link' => 'nullable|url',
+            'duration' => 'sometimes|in:1_day,3_days,1_week,1_month',
+        ]);
+
+        $data = $request->except(['image']);
+
+        // رفع الصورة الجديدة
+        if ($request->hasFile('image')) {
+            if ($ad->image_url) {
+                Storage::disk('public')->delete($ad->image_url);
+            }
+            $data['image_url'] = $request->file('image')->store('ads/images', 'public');
+        }
+
+        // تحديث السعر إذا تغيرت المدة
+        if ($request->has('duration')) {
+            $prices = [
+                '1_day' => $this->getPriceByType($ad->type, '1_day'),
+                '3_days' => $this->getPriceByType($ad->type, '3_days'),
+                '1_week' => $this->getPriceByType($ad->type, '1_week'),
+                '1_month' => $this->getPriceByType($ad->type, '1_month'),
+            ];
+            $data['price'] = $prices[$request->duration];
+            $data['expires_at'] = $this->calculateExpiryDate($request->duration);
+        }
+
+        $ad->update($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Ad updated successfully.',
+            'data' => $ad
+        ]);
+    }
+
+    // 📌 6. إلغاء طلب الإعلان (حذف)
+    // ============================================================
+    public function destroyAd($id)
+    {
+        $user = auth()->user();
+
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized.'
+            ], 403);
+        }
+
+        $ad = Ad::forSeller($user->id)
+            ->whereIn('status', ['pending', 'rejected'])
+            ->findOrFail($id);
+
+        if ($ad->image_url) {
+            Storage::disk('public')->delete($ad->image_url);
+        }
+
+        $ad->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Ad deleted successfully.'
+        ]);
+    }
+
+    // 📌 7. عرض إحصائيات الإعلانات (Dashboard)
+    // ============================================================
+    public function dashboard()
+    {
+        $user = auth()->user();
+
+        if (!in_array($user->role, ['vendor', 'wholesale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized.'
+            ], 403);
+        }
+
+        // 🔥 استعلام أساسي
+        $baseQuery = Ad::forSeller($user->id);
+
+        return response()->json([
+            'success' => true,
+            'stats' => [
+                'total_ads' => (clone $baseQuery)->count(),
+                'active_ads' => (clone $baseQuery)->active()->count(),
+                'pending_ads' => (clone $baseQuery)->pending()->count(),
+                'expired_ads' => (clone $baseQuery)->expired()->count(),
+                'rejected_ads' => (clone $baseQuery)->where('status', 'rejected')->count(),
+                'total_views' => (clone $baseQuery)->sum('views_count'),
+                'total_clicks' => (clone $baseQuery)->sum('clicks_count'),
+                'total_spent' => (clone $baseQuery)->sum('price'),
+            ],
+            'by_type' => [
+                'banner' => (clone $baseQuery)->where('type', 'banner')->count(),
+                'promoted_product' => (clone $baseQuery)->where('type', 'promoted_product')->count(),
+                'featured_store' => (clone $baseQuery)->where('type', 'featured_store')->count(),
+                'paid_notification' => (clone $baseQuery)->where('type', 'paid_notification')->count(),
+            ]
+        ]);
+    }
+    // 📌 دوال مساعدة
+    // ============================================================
+
+    private function getPriceByType($type, $duration)
+    {
+        $prices = [
+            'banner' => [
+                '1_day' => 3000,
+                '3_days' => 8000,
+                '1_week' => 15000,
+                '1_month' => 50000,
+            ],
+            'promoted_product' => [
+                '1_day' => 3000,
+                '3_days' => 8000,
+                '1_week' => 15000,
+                '1_month' => 50000,
+            ],
+            'featured_store' => [
+                '1_day' => 4000,
+                '3_days' => 10000,
+                '1_week' => 20000,
+                '1_month' => 60000,
+            ],
+            'paid_notification' => [
+                '1_day' => 15000,
+                '3_days' => 40000,
+                '1_week' => 80000,
+                '1_month' => 250000,
+            ],
+        ];
+
+        return $prices[$type][$duration] ?? 0;
+    }
+
+    private function calculateExpiryDate($duration)
+    {
+        $map = [
+            '1_day' => now()->addDay(),
+            '3_days' => now()->addDays(3),
+            '1_week' => now()->addWeek(),
+            '1_month' => now()->addMonth(),
+        ];
+
+        return $map[$duration] ?? now()->addDay();
+    }
+
+    private function getDailyViews($ad)
+    {
+        return $ad->views()
+            ->where('type', 'view')
+            ->whereDate('created_at', today())
+            ->count();
+    }
+
 }
 
