@@ -14,6 +14,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str; // 🔥 أضف هذا السطر
+use Illuminate\Support\Facades\Cache;  // 🔥🔥🔥 أضف هذا السطر
+
 
 class UserController extends Controller
 {
@@ -605,9 +607,8 @@ class UserController extends Controller
             ], 403);
         }
 
-        // 🔥 جلب الكوبونات المفعلة فقط (is_active = 1)
-        $coupons = Coupon::where('apply_to_all_products', true)
-            ->where('is_active', 1)  // 🔥 فقط المفعلين
+        // 🔥 جلب الكوبونات المفعلة فقط (is_active = 1) بغض النظر عن apply_to_all_products
+        $coupons = Coupon::where('is_active', 1)  // 🔥 فقط المفعلين
             ->with('seller:id,first_name,last_name,store_name')
             ->get();
 
@@ -619,11 +620,11 @@ class UserController extends Controller
 
     // 📌 9. التحقق من صلاحية كوبون (للمشتري)
 // ============================================================
+
     public function validateCoupon(Request $request)
     {
         $user = auth()->user();
 
-        // 🔥 شرط: المشتري أو التاجر (Vendor/Wholesale)
         if (!in_array($user->role, ['buyer', 'vendor', 'wholesale'])) {
             return response()->json([
                 'success' => false,
@@ -632,13 +633,28 @@ class UserController extends Controller
         }
 
         $request->validate([
-            'code' => 'required|string',
-            'order_total' => 'required|numeric|min:0',
-            'product_ids' => 'nullable|array'
+            'code' => 'required|string'
         ]);
 
-        $code = strtoupper(trim($request->code));
+        // 🔥🔥🔥 جيب السعر من Cache
+        $orderTotal = Cache::get('order_total_' . $user->id);
+        $productIds = Cache::get('order_product_ids_' . $user->id) ?? [];
 
+        // 🔥 إذا ما في Cache، جيب من الـ Request (للتوافق مع القديم)
+        if (!$orderTotal && $request->has('order_total')) {
+            $orderTotal = $request->order_total;
+            $productIds = $request->product_ids ?? [];
+        }
+
+        // 🔥 إذا ما في ولا شي، ارجع خطأ
+        if (!$orderTotal) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No order total found. Please create an order first or provide order_total.'
+            ], 400);
+        }
+
+        $code = strtoupper(trim($request->code));
         $coupon = Coupon::where('code', $code)->first();
 
         if (!$coupon) {
@@ -648,11 +664,24 @@ class UserController extends Controller
             ], 404);
         }
 
+        // 🔥 تحقق: إذا الكوبون خاص بمنتجات وما في منتجات محددة
+        if (!$coupon->apply_to_all_products && empty($productIds)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This coupon applies to specific products. Please add products to cart first.',
+                'coupon' => [
+                    'code' => $coupon->code,
+                    'title' => $coupon->title,
+                    'product_ids' => $coupon->product_ids
+                ]
+            ], 400);
+        }
+
         // التحقق من الصلاحية
         $validation = $coupon->isValid(
             $user->id,
-            $request->order_total,
-            $request->product_ids ?? []
+            $orderTotal,
+            $productIds
         );
 
         if (!$validation['valid']) {
@@ -662,31 +691,16 @@ class UserController extends Controller
             ], 400);
         }
 
-        // حساب الخصم
-        $discountAmount = $coupon->calculateDiscount($request->order_total);
+        $discountAmount = $coupon->calculateDiscount($orderTotal);
 
         return response()->json([
             'success' => true,
             'coupon' => $coupon,
-            'discount_amount' => $discountAmount,
-            'final_total' => round($request->order_total - $discountAmount, 2)
+            'total_before_discount' => round($orderTotal, 2),
+            'discount_amount' => round($discountAmount, 2),
+            'final_total' => round($orderTotal - $discountAmount, 2)
         ]);
     }
-    // 📌 10. وظيفة مساعدة: توليد كود فريد
-    // ============================================================
-    private function generateUniqueCode()
-    {
-        $prefix = 'CPN-';
-        $code = $prefix . strtoupper(Str::random(8));
-
-        while (Coupon::where('code', $code)->exists()) {
-            $code = $prefix . strtoupper(Str::random(8));
-        }
-
-        return $code;
-    }
-
-
     // 📌 1. عرض جميع إعلانات التاجر مع فلترة
     // ============================================================
     public function indexAd(Request $request)
@@ -1071,5 +1085,18 @@ class UserController extends Controller
             ->count();
     }
 
+    // 📌 وظيفة مساعدة: توليد كود فريد للكوبون
+// ============================================================
+    private function generateUniqueCode()
+    {
+        $prefix = 'CPN-';
+        $code = $prefix . strtoupper(Str::random(8));
+
+        while (Coupon::where('code', $code)->exists()) {
+            $code = $prefix . strtoupper(Str::random(8));
+        }
+
+        return $code;
+    }
 }
 

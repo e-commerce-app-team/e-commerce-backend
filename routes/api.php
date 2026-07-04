@@ -177,7 +177,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('ads/{id}/deactivate', [AdminController::class, 'deactivateAd'])->middleware(['auth:sanctum', 'super_admin']);
 
     // إحصائيات الإعلانات
-    Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'isSuperAdmin']);
 });
 
 

@@ -11,6 +11,8 @@ use DB;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;  // 🔥🔥🔥 أضف هذا السطر
+
 class OrderController extends Controller
 {
 
@@ -108,6 +110,7 @@ class OrderController extends Controller
               ]
           ], 201);
       } */
+   
     public function store(Request $request)
     {
         $buyer = auth()->user();
@@ -160,6 +163,11 @@ class OrderController extends Controller
 
         $totalVatAmount = $calculatedTotalPrice - $calculatedSubtotal;
 
+        // 🔥🔥🔥 تخزين السعر في Cache بدل Session
+        Cache::put('order_total_' . $buyer->id, $calculatedTotalPrice, 3600); // ساعة كاملة
+        Cache::put('order_product_ids_' . $buyer->id, $productIds, 3600);
+        Cache::put('order_items_' . $buyer->id, $request->input('items'), 3600);
+
         // 🔥 معالجة الكوبون مع تشخيص
         $couponId = null;
         $discountAmount = 0;
@@ -169,14 +177,12 @@ class OrderController extends Controller
             $coupon = Coupon::where('code', strtoupper($request->coupon_code))->first();
 
             if ($coupon) {
-                // 🔥 التحقق من صلاحية الكوبون
                 $validation = $coupon->isValid(
                     $buyer->id,
                     $calculatedTotalPrice,
                     $productIds
                 );
 
-                // 🔥🔥🔥 كود التشخيص: إذا الكوبون مش صالح، يرجع رسالة توضح السبب
                 if (!$validation['valid']) {
                     return response()->json([
                         'success' => false,
@@ -202,16 +208,13 @@ class OrderController extends Controller
                     ], 400);
                 }
 
-                // ✅ إذا الكوبون صالح، نحسب الخصم
                 if ($validation['valid']) {
                     $discountAmount = $coupon->calculateDiscount($calculatedTotalPrice);
                     $finalPrice = $calculatedTotalPrice - $discountAmount;
                     $couponId = $coupon->id;
 
-                    // زيادة عداد الاستخدامات
                     $coupon->increment('used_count');
 
-                    // تسجيل استخدام الكوبون
                     CouponUsage::create([
                         'coupon_id' => $coupon->id,
                         'user_id' => $buyer->id,
@@ -222,7 +225,6 @@ class OrderController extends Controller
                     ]);
                 }
             } else {
-                // 🔥 إذا ما لقى الكوبون
                 return response()->json([
                     'success' => false,
                     'message' => 'Coupon not found: ' . $request->coupon_code
@@ -230,7 +232,6 @@ class OrderController extends Controller
             }
         }
 
-        // إنشاء الطلب
         $order = Order::create([
             'user_id' => $buyer->id,
             'seller_id' => $request->seller_id,
@@ -252,7 +253,6 @@ class OrderController extends Controller
             ]
         ]);
 
-        // تحديث order_id في سجل استخدام الكوبون
         if ($couponId) {
             CouponUsage::where('coupon_id', $couponId)
                 ->where('user_id', $buyer->id)
@@ -271,6 +271,11 @@ class OrderController extends Controller
             $validatedItem['product']->increment('sales_count', $validatedItem['quantity']);
         }
         $order->products()->attach($syncData);
+
+        // 🔥 تنظيف Cache بعد إنشاء الطلب (اختياري)
+        // Cache::forget('order_total_' . $buyer->id);
+        // Cache::forget('order_product_ids_' . $buyer->id);
+        // Cache::forget('order_items_' . $buyer->id);
 
         return response()->json([
             'success' => true,
