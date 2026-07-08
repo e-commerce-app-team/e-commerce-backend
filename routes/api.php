@@ -3,9 +3,11 @@ use App\Http\Controllers\AdController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\ChatController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
 use App\Http\Controllers\ProductController;
@@ -17,10 +19,36 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
+// ─── Authentication ────────────────────────────────────────────────────────
 Route::Post('login', [UserController::class, 'login']);
 Route::post('register/buyer', [UserController::class, 'registerBuyer']);
 Route::post('register/seller', [UserController::class, 'registerSeller']);
 Route::post('logout', [UserController::class, 'logout'])->middleware('auth:sanctum');
+
+// ─── OTP & Password Reset (Public) ────────────────────────────────────────
+
+// التحقق قبل إنشاء الحساب (Pre-Registration OTP)
+Route::post('auth/signup/send-otp', [OtpController::class, 'sendRegistrationOtp']);
+Route::post('auth/signup/verify-otp-pre', [OtpController::class, 'verifyRegistrationOtp']);
+
+// نسيت كلمة المرور
+Route::post('auth/forgot-password', [OtpController::class, 'sendForgotPasswordOtp']);
+Route::post('auth/verify-otp', [OtpController::class, 'verifyForgotPasswordOtp']);
+Route::post('auth/reset-password', [OtpController::class, 'resetPassword']);
+
+// التحقق بعد تسجيل الدخول (2FA)
+Route::post('auth/login/verify-otp', [OtpController::class, 'verifyLoginOtp']);
+
+// التحقق بعد إنشاء الحساب بالطريقة التقليدية (إن لزم)
+Route::post('auth/signup/verify-otp', [OtpController::class, 'verifySignupOtp']);
+
+// إعادة إرسال OTP (موحّد)
+Route::post('auth/resend-otp', [OtpController::class, 'resendOtp']);
+
+// ─── 2FA Toggle (Protected) ───────────────────────────────────────────────
+Route::post('user/toggle-2fa', [OtpController::class, 'toggleTwoFactor'])->middleware('auth:sanctum');
+
+
 
 Route::post('seller/store-settings/create', [UserController::class, 'createStoreSettings'])->middleware('auth:sanctum');
 Route::post('seller/store-settings/update', [UserController::class, 'updateStoreSettings'])->middleware('auth:sanctum');
@@ -69,11 +97,42 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('orders/ready-shipping', [OrderController::class, 'readyForShipping']);
 
     Route::get('my-orders', [OrderController::class, 'myOrders']);
+    
+    // Chat & Messaging Routes
+    Route::prefix('chat')->group(function () {
+        Route::get('firebase-token', [ChatController::class, 'generateFirebaseToken']);
+        
+        // Quick Replies
+        Route::get('quick-replies', [ChatController::class, 'getQuickReplies']);
+        Route::post('quick-replies', [ChatController::class, 'storeQuickReply']);
+        Route::put('quick-replies/{id}', [ChatController::class, 'updateQuickReply']);
+        Route::delete('quick-replies/{id}', [ChatController::class, 'deleteQuickReply']);
+        
+        // Auto Replies
+        Route::get('auto-replies', [ChatController::class, 'getAutoReplies']);
+        Route::post('auto-replies', [ChatController::class, 'storeAutoReply']);
+        Route::put('auto-replies/{id}', [ChatController::class, 'updateAutoReply']);
+        Route::delete('auto-replies/{id}', [ChatController::class, 'deleteAutoReply']);
+        
+        // Block / Report
+        Route::get('blocked-users', [ChatController::class, 'getBlockedUsers']);
+        Route::post('block-user', [ChatController::class, 'blockUser']);
+        Route::delete('unblock-user/{id}', [ChatController::class, 'unblockUser']);
+        
+        Route::post('report-user', [ChatController::class, 'reportUser']);
+    });
 });
 
+// 📌 Routes العامة للإعلانات (لا تحتاج تسجيل دخول)
+// ============================================================
+Route::get('ads/active', [AdController::class, 'getActiveAds']);
+Route::get('ads/banners', [AdController::class, 'getBanners']);
+Route::get('ads/promoted', [AdController::class, 'getPromotedProducts']);
+Route::get('ads/featured-stores', [AdController::class, 'getFeaturedStores']);
 
 
-Route::get('categories', [CategoryController::class, 'getAllCategories'])->middleware('auth:sanctum');
+
+Route::get('categories', [CategoryController::class, 'getAllCategories']);
 
 // تأكد من وضع هذه المسارات داخل الـ Middleware الخاص بـ sanctum لتحديد هوية التاجر عبر auth()->id()
 // المسارات محمية بـ Sanctum لتحديد هوية التاجر عبر الـ Token
@@ -130,12 +189,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 
-    // 📌 Routes العامة (لا تحتاج تسجيل دخول)
-// ============================================================
-    Route::get('ads/active', [AdController::class, 'getActiveAds']);
-    Route::get('ads/banners', [AdController::class, 'getBanners']);
-    Route::get('ads/promoted', [AdController::class, 'getPromotedProducts']);
-    Route::get('ads/featured-stores', [AdController::class, 'getFeaturedStores']);
+    // 📌 Routes العامة (لا تحتاج تسجيل دخول) تم نقلها لخارج الميدلوير
 
     // 📌 Routes للمستخدمين المسجلين (تتبع المشاهدات والنقرات)
 // ============================================================

@@ -47,8 +47,9 @@ return new class extends Migration {
             $table->integer('views_count')->default(0);
             $table->integer('clicks_count')->default(0);
 
-            // ملاحظات الأدمن
+            // ملاحظات الأدمن ومن قام بالرد
             $table->text('admin_notes')->nullable();
+            $table->foreignId('admin_id')->nullable()->constrained('admins')->onDelete('set null');
 
             $table->timestamps();
         });

@@ -39,7 +39,14 @@ class User extends Authenticatable
         'balance',
         'payout_method',
         'payout_account',
-        'wallet_pin'
+        'wallet_pin',
+        // ─── OTP & 2FA ────────────────────────────────────────────────
+        'otp_code',
+        'otp_expires_at',
+        'email_verified_at',
+        'phone_verified_at',
+        'two_factor_enabled',
+        'two_factor_method',
     ];
 
     protected $hidden = [
@@ -51,13 +58,29 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'password' => 'hashed',
-            'wallet_pin' => 'hashed',
-            'balance' => 'decimal:2',
-            'working_hours' => 'array',
-            'social_links' => 'array',
+            'email_verified_at'   => 'datetime',
+            'phone_verified_at'   => 'datetime',
+            'otp_expires_at'      => 'datetime',
+            'password'            => 'hashed',
+            'wallet_pin'          => 'hashed',
+            'balance'             => 'decimal:2',
+            'working_hours'       => 'array',
+            'social_links'        => 'array',
+            'two_factor_enabled'  => 'boolean',
         ];
+    }
+
+    // ─── OTP & 2FA Helpers ──────────────────────────────────────────────────
+    public function isOtpValid(string $code): bool
+    {
+        return $this->otp_code === $code
+            && $this->otp_expires_at
+            && $this->otp_expires_at->isFuture();
+    }
+
+    public function clearOtp(): void
+    {
+        $this->update(['otp_code' => null, 'otp_expires_at' => null]);
     }
 
     // ============================================================

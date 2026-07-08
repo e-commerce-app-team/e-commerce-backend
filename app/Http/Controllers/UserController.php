@@ -9,114 +9,128 @@ use App\Http\Requests\WholesaleRegisterRequest;
 use App\Models\Ad;
 use App\Models\Coupon;
 use App\Models\User;
+use App\Services\OtpService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str; // 🔥 أضف هذا السطر
-use Illuminate\Support\Facades\Cache;  // 🔥🔥🔥 أضف هذا السطر
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Cache;
 
 
 class UserController extends Controller
 {
+    protected OtpService $otpService;
+
+    public function __construct(OtpService $otpService)
+    {
+        $this->otpService = $otpService;
+    }
+
     public function login(Request $request)
     {
         // 1. التحقق من صحة البيانات المدخلة
         $request->validate([
-            'login' => 'required|string', // login = email OR phone
+            'login'    => 'required|string',
             'password' => 'required|string',
         ]);
 
-        // 2. تحديد نوع المدخل (إيميل أم موبايل)
+        // 2. تحديد نوع المدخل (إيميل أم هاتف)
         $login = $request->login;
         $field = filter_var($login, FILTER_VALIDATE_EMAIL) ? 'email' : 'phone';
 
         // 3. محاولة تسجيل الدخول
-        $credentials = [
-            $field => $login,
-            'password' => $request->password,
-        ];
+        $credentials = [$field => $login, 'password' => $request->password];
 
         if (Auth::attempt($credentials)) {
             $user = Auth::user();
 
-            // 4. التحقق من حالة الحساب (Status Check)
+            // 4. التحقق من حالة الحساب
             if ($user->status !== 'approved') {
+                $message = match($user->status) {
+                    'pending'  => 'Your account is pending admin approval. Please wait for activation.',
+                    'rejected' => 'Your account has been rejected. Please contact support.',
+                    default    => 'Your account is currently inactive.',
+                };
+                Auth::logout();
+                return response()->json(['success' => false, 'message' => $message], 403);
+            }
 
-                // تحديد رسالة الخطأ بناءً على الحالة
-                $message = '';
-                if ($user->status === 'pending') {
-                    $message = 'Your account is pending admin approval. Please wait for activation.';
-                } elseif ($user->status === 'rejected') {
-                    $message = 'Your account has been rejected. Please contact support.';
-                } else {
-                    $message = 'Your account is currently inactive.';
-                }
+            // 5. إذا كان الـ 2FA مفعلاً - نرسل OTP ونعيد 202
+            if ($user->two_factor_enabled) {
+                // إرسال الـ OTP عبر القناة المفضلة
+                $this->otpService->sendViaPreferredMethod($user, 'login_2fa');
 
-                // تسجيل الخروج لعدم السماح ببقاء الجلسة
+                // إعادة المستخدم لتجنب بقاء جلسة ويب
                 Auth::logout();
 
                 return response()->json([
-                    'success' => false,
-                    'message' => $message
-                ], 403);
+                    'success'      => true,
+                    'requires_otp' => true,
+                    'message'      => 'A verification code has been sent to your ' . $user->two_factor_method . '.',
+                    'user_id'      => $user->id,
+                    'method'       => $user->two_factor_method,
+                    'masked_to'    => $user->two_factor_method === 'email'
+                        ? $this->maskEmail($user->email)
+                        : $this->maskPhone($user->phone),
+                ], 202);
             }
 
-            // 5. التوجيه وتوليد التوكن بناءً على الرتبة (User Role)
-            $redirectTo = '';
-            $roleMessage = '';
-            $token = null;
+            // 6. تسجيل دخول عادي - توليد التوكن
+            $token = $user->createToken('auth_token')->plainTextToken;
 
-            switch ($user->role) {
-                case 'vendor':
-                    $redirectTo = '/vendor/home';
-                    $roleMessage = 'Welcome back, Vendor!';
-                    $token = $user->createToken('auth_token')->plainTextToken;
-                    break;
+            $redirectTo = match($user->role) {
+                'vendor', 'wholesale' => '/seller/home',
+                default               => '/home',
+            };
 
-                case 'wholesale':
-                    $redirectTo = '/wholesale/home';
-                    $roleMessage = 'Welcome back, Wholesale Vendor!';
-                    $token = $user->createToken('auth_token')->plainTextToken;
-                    break;
+            $roleMessage = match($user->role) {
+                'vendor'    => 'Welcome back, Vendor!',
+                'wholesale' => 'Welcome back, Wholesale Vendor!',
+                default     => 'Welcome back, Buyer!',
+            };
 
-                default:
-                    $redirectTo = '/home';
-                    $roleMessage = 'Welcome back, Buyer!';
-                    $token = null;
-                    break;
-            }
-
-            // 6. إرسال الرد النهائي مع جميع الحقول
             return response()->json([
-                'success' => true,
-                'message' => $roleMessage,
+                'success'      => true,
+                'requires_otp' => false,
+                'message'      => $roleMessage,
                 'access_token' => $token,
-                'token_type' => 'Bearer',
-                'redirect_to' => $redirectTo,
-                'user' => [
-                    'id' => $user->id,
-                    'first_name' => $user->first_name,
-                    'last_name' => $user->last_name,
-                    'name' => $user->first_name . ' ' . $user->last_name,
-                    'email' => $user->email,
-                    'phone' => $user->phone,
-                    'role' => $user->role,
-                    'status' => $user->status,
-                    'store_name' => $user->store_name ?? null,
-                    'category' => $user->category ?? null,
-                    'email_verified_at' => $user->email_verified_at ? $user->email_verified_at->toDateTimeString() : null,
-                    'phone_verified_at' => $user->phone_verified_at ? $user->phone_verified_at->toDateTimeString() : null,
-                    'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
-                ]
+                'token_type'   => 'Bearer',
+                'redirect_to'  => $redirectTo,
+                'user'         => [
+                    'id'                 => $user->id,
+                    'first_name'         => $user->first_name,
+                    'last_name'          => $user->last_name,
+                    'name'               => $user->first_name . ' ' . $user->last_name,
+                    'email'              => $user->email,
+                    'phone'              => $user->phone,
+                    'role'               => $user->role,
+                    'status'             => $user->status,
+                    'store_name'         => $user->store_name ?? null,
+                    'category'           => $user->category ?? null,
+                    'email_verified_at'  => $user->email_verified_at?->toDateTimeString(),
+                    'phone_verified_at'  => $user->phone_verified_at?->toDateTimeString(),
+                    'profile_photo'      => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
+                    'two_factor_enabled' => $user->two_factor_enabled,
+                    'two_factor_method'  => $user->two_factor_method,
+                ],
             ], 200);
         }
 
-        // في حال فشل بيانات تسجيل الدخول
-        return response()->json([
-            'success' => false,
-            'message' => 'Invalid email/phone or password.'
-        ], 401);
+        return response()->json(['success' => false, 'message' => 'Invalid email/phone or password.'], 401);
+    }
+
+    // ─── Helper: تقنيع الإيميل والهاتف ───────────────────────────────────
+    private function maskEmail(string $email): string
+    {
+        [$local, $domain] = explode('@', $email);
+        $masked = substr($local, 0, 2) . str_repeat('*', max(0, strlen($local) - 3)) . substr($local, -1);
+        return $masked . '@' . $domain;
+    }
+
+    private function maskPhone(string $phone): string
+    {
+        return substr($phone, 0, 3) . str_repeat('*', max(0, strlen($phone) - 5)) . substr($phone, -2);
     }
 
     public function logout(Request $request)
@@ -133,41 +147,49 @@ class UserController extends Controller
         // 1. جلب البيانات المفحوصة
         $validated = $request->validated();
 
-        // 2. معالجة الصور وإضافتها لنفس المصفوفة ($validated)
+        // 2. معالجة الصور
         if ($request->hasFile('profile_photo')) {
             $validated['profile_photo'] = $request->file('profile_photo')->store('buyers/profiles', 'public');
         }
-
         if ($request->hasFile('id_card_photo')) {
             $validated['id_card_photo'] = $request->file('id_card_photo')->store('buyers/ids', 'public');
         }
 
         // 3. تشفير كلمة المرور وتحديد الرتبة والحالة
         $validated['password'] = Hash::make($request->password);
-        $validated['role'] = 'buyer';
-        $validated['status'] = 'approved';
+        $validated['role']     = 'buyer';
+        $validated['status']   = 'approved';
+        // التحقق مما إذا كان المستخدم قد قام بالتحقق من الـ OTP مسبقاً (عن طريق الإيميل أو الهاتف)
+        $isVerified = \Illuminate\Support\Facades\Cache::pull('verified_registration_' . $request->email) || 
+                      \Illuminate\Support\Facades\Cache::pull('verified_registration_' . $request->phone);
 
-        // 4. إنشاء المستخدم باستخدام المصفوفة التي تحتوي الآن على الصور
+        // البريد مؤكد إذا تم التحقق من الـ OTP مسبقاً
+        $validated['email_verified_at'] = $isVerified ? now() : null;
+
+        // 4. إنشاء المستخدم
         $user = User::create($validated);
 
-        // --- إضافة: توليد التوكن للمشتري عند التسجيل ---
+        if (!$isVerified) {
+            // 5. إرسال OTP للتحقق من البريد الإلكتروني (الطريقة القديمة)
+            $this->otpService->sendViaEmail($user, 'verification');
+
+            return response()->json([
+                'success'  => true,
+                'message'  => 'Registration successful! Please verify your email address.',
+                'requires_verification' => true,
+                'user_id'  => $user->id,
+                'email'    => $user->email,
+            ], 201);
+        }
+
+        // إذا كان تم التحقق مسبقاً، نقوم بإصدار التوكن وتسجيل الدخول مباشرة
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        // 5. الرد النهائي مع التوكن
         return response()->json([
-            'success' => true,
-            'message' => 'Buyer registered successfully.',
-            'access_token' => $token, // التوكن المضاف
-            'token_type' => 'Bearer',
-            'user' => [
-                'id' => $user->id,
-                'first_name' => $user->first_name,
-                'last_name' => $user->last_name,
-                'email' => $user->email,
-                'role' => $user->role,
-                'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
-                'id_card_photo' => $user->id_card_photo ? asset('storage/' . $user->id_card_photo) : null,
-            ]
+            'success'  => true,
+            'message'  => 'Registration successful!',
+            'user'     => $user,
+            'token'    => $token,
         ], 201);
     }
     public function registerSeller(SellerRegisterRequest $request)
@@ -203,15 +225,30 @@ class UserController extends Controller
         $validated['status'] = 'pending';
 
         // 6. الحفظ
+        // التحقق مما إذا كان البائع قد قام بالتحقق من الـ OTP مسبقاً
+        $isVerified = \Illuminate\Support\Facades\Cache::pull('verified_registration_' . $request->email) || 
+                      \Illuminate\Support\Facades\Cache::pull('verified_registration_' . $request->phone);
+
+        $validated['email_verified_at'] = $isVerified ? now() : null;
+
         // 6. الحفظ
         $user = User::create($validated);
 
         // تعديل: شحن العلاقة الصحيحة الموجودة بالموديل
         $user->load('globalCategory');
 
+        // إذا كان تم التحقق مسبقاً، نقوم بإصدار التوكن وتمريره (بالرغم من أن الحساب قيد المراجعة، يمكنه تسجيل الدخول للوحة التحكم ورؤية رسالة "قيد المراجعة")
+        $token = $isVerified ? $user->createToken('auth_token')->plainTextToken : null;
+
+        if (!$isVerified) {
+            $this->otpService->sendViaEmail($user, 'verification');
+        }
+
         return response()->json([
             'success' => true,
-            'message' => 'Registration successful. Your seller account is pending admin approval.',
+            'message' => $isVerified ? 'Registration successful. Your seller account is pending admin approval.' : 'Registration successful! Please verify your email address.',
+            'requires_verification' => !$isVerified,
+            'token' => $token,
             'user' => [
                 'id' => $user->id,
                 'first_name' => $user->first_name,
@@ -753,6 +790,7 @@ class UserController extends Controller
     {
         return response()->json([
             'success' => true,
+            'balance' => auth()->user()->balance ?? 0,
             'types' => [
                 [
                     'type' => 'banner',
@@ -832,7 +870,7 @@ class UserController extends Controller
             'title' => 'required|string|max:255',
             'description' => 'nullable|string|max:500',
             'image' => 'nullable|image|max:2048',
-            'link' => 'nullable|url',
+            'link' => 'nullable|string',
             'duration' => 'required|in:1_day,3_days,1_week,1_month',
         ]);
 
@@ -845,6 +883,14 @@ class UserController extends Controller
         ];
 
         $price = $prices[$request->duration];
+
+        // التحقق من رصيد المحفظة
+        if ($user->balance < $price) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Insufficient wallet balance.'
+            ], 402); // 402 Payment Required
+        }
 
         // حساب تواريخ البداية والنهاية
         $startsAt = now();
@@ -869,6 +915,10 @@ class UserController extends Controller
             'expires_at' => $expiresAt,
             'status' => 'pending', // يبدأ قيد المراجعة
         ]);
+
+        // خصم التكلفة من المحفظة
+        $user->balance -= $price;
+        $user->save();
 
         return response()->json([
             'success' => true,

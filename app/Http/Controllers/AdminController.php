@@ -7,6 +7,7 @@ use App\Models\PayoutRequest;
 use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Http\Request;
+use App\Jobs\SendAdNotification;
 
 class AdminController extends Controller
 {
@@ -176,7 +177,13 @@ class AdminController extends Controller
             'status' => 'active',
             'starts_at' => now(),
             'expires_at' => $this->calculateExpiryDate($ad->duration),
+            'admin_id' => auth()->id()
         ]);
+
+        // 🔥 إطلاق جوب إرسال الإشعار إذا كان النوع إشعاراً مدفوعاً
+        if ($ad->type === 'paid_notification') {
+            SendAdNotification::dispatch($ad);
+        }
 
         return response()->json([
             'success' => true,
@@ -198,7 +205,8 @@ class AdminController extends Controller
 
         $ad->update([
             'status' => 'rejected',
-            'admin_notes' => $request->admin_notes
+            'admin_notes' => $request->admin_notes,
+            'admin_id' => auth()->id()
         ]);
 
         return response()->json([

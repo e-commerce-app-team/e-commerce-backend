@@ -54,7 +54,17 @@ return new class extends Migration {
             $table->string('payout_account')->nullable();
             $table->string('wallet_pin')->nullable();
 
+            $table->timestamp('email_verified_at')->nullable();
             $table->timestamp('phone_verified_at')->nullable();
+
+            // ─── OTP Fields ─────────────────────────────────────────────
+            $table->string('otp_code')->nullable();
+            $table->timestamp('otp_expires_at')->nullable();
+
+            // ─── Two-Factor Authentication ───────────────────────────────
+            $table->boolean('two_factor_enabled')->default(false);
+            $table->enum('two_factor_method', ['email', 'phone'])->default('email');
+
             $table->rememberToken();
             $table->timestamps();
         });
