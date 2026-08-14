@@ -17,8 +17,12 @@ class SubOrder extends Model
     {
         return $this->belongsTo(Order::class);
     }
-    public function orderItems()
+    public function Items()
 {
     return $this->hasMany(OrderItem::class);
 }
+public function seller()
+    {
+        return $this->belongsTo(User::class, 'seller_id'); // أو Store::class حسب مشروعك
+    }
 }

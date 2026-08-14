@@ -265,6 +265,7 @@ Route::get('/stores/{id}/reviews', [StoreController::class, 'getStoreReviews']);
     
     // إتمام الطلب
     Route::post('/checkout', [CartController::class, 'checkout'])->middleware('auth:sanctum');
+    Route::get('/orders', [OrderController::class, 'index'])->middleware('auth:sanctum');
     });
 
 //رابط ارجاع الاقسام الرئيسية للمنصة كاملة 

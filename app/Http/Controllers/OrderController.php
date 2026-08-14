@@ -7,6 +7,7 @@ use App\Models\CouponUsage;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Transaction;
+use App\Http\Resources\OrderResource;
 use DB;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -261,15 +262,39 @@ class OrderController extends Controller
                 ->first()
                     ?->update(['order_id' => $order->id]);
         }
+$syncData = [];
 
-        $syncData = [];
+        // 1. إنشاء الطلب الفرعي الآمن للطلب
+        $subOrder = $order->subOrders()->create([
+            'seller_id'   => $request->seller_id,
+            'status'      => 'pending',
+            'total_price' => round($finalPrice, 2),
+        ]);
+
         foreach ($validatedItems as $validatedItem) {
-            $syncData[$validatedItem['product']->id] = [
-                'quantity' => $validatedItem['quantity'],
-                'price' => round($validatedItem['price'], 2)
+            $product   = $validatedItem['product'];
+            $qty       = $validatedItem['quantity'];
+            $unitPrice = round($validatedItem['price'], 2);
+            $itemTotal = round($unitPrice * $qty, 2);
+
+            // البيانات للجدول القديم (كما هي)
+            $syncData[$product->id] = [
+                'quantity' => $qty,
+                'price'    => $unitPrice
             ];
-            $validatedItem['product']->increment('sales_count', $validatedItem['quantity']);
+
+            // 2. تعبئة عناصر الطلب الفرعي لمنع السعر 0
+            $subOrder->items()->create([
+                'product_id'  => $product->id,
+                'quantity'    => $qty,
+                'unit_price'  => $unitPrice,
+                'total_price' => $itemTotal,
+            ]);
+
+            $product->increment('sales_count', $qty);
         }
+
+        // الحفاظ على العلاقة القديمة حتى لا يتأثر أي مكان آخر
         $order->products()->attach($syncData);
 
         // 🔥 تنظيف Cache بعد إنشاء الطلب (اختياري)
@@ -918,5 +943,44 @@ class OrderController extends Controller
             'data' => $orders
         ], 200);
     }
+    //تابع تتبع الطلبات بالنسبة للمشتري 
+public function index(Request $request)
+{
+    $user = $request->user();
+
+    // فحص دور المستخدم
+    if ($user->role !== 'buyer') {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized access to buyer data.'
+        ], 403);
+    }
+    $status = $request->query('status'); // جلب حالة الفلترة (all / active / completed / cancelled أو القيمة المرسلة)
+    $perPage = $request->query('per_page', 10);
+
+    // بناء الاستعلام الأساسي مع تحميل العلاقات المشروطة
+    $query = Order::query()
+        ->where('user_id', $user->id)
+        ->with([
+            'subOrders' => function ($q) use ($status) {
+                // إذا وُجد فلتر حالة، نفلتر الطلبات الفرعية المعروضة بداخل الفاتورة أيضاً
+                if ($status && $status !== 'all') {
+                    $q->where('status', $status);
+                }
+                $q->with(['items.product', 'seller']);
+            }
+        ]);
+
+    // فلترة الطلبات الرئيسية لتضم فقط الفواتير التي تمتلك طلبات فرعية بهذه الحالة
+    if ($status && $status !== 'all') {
+        $query->whereHas('subOrders', function ($q) use ($status) {
+            $q->where('status', $status);
+        });
+    }
+
+    $orders = $query->latest()->paginate($perPage);
+
+    return OrderResource::collection($orders);
+}
 }
 
