@@ -110,7 +110,7 @@ class OrderController extends Controller
               ]
           ], 201);
       } */
-   
+
     public function store(Request $request)
     {
         $buyer = auth()->user();
@@ -132,6 +132,19 @@ class OrderController extends Controller
             'coupon_code' => 'nullable|string|exists:coupons,code'
         ]);
 
+        // 🔥🔥🔥 التحقق من أن جميع المنتجات تخص البائع المحدد
+        $productIds = collect($request->input('items'))->pluck('product_id')->toArray();
+        $products = Product::whereIn('id', $productIds)->get();
+
+        foreach ($products as $product) {
+            if ($product->user_id != $request->seller_id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Product '{$product->name}' (ID: {$product->id}) does not belong to the selected seller.",
+                ], 400);
+            }
+        }
+
         $calculatedSubtotal = 0;
         $calculatedTotalPrice = 0;
         $validatedItems = [];
@@ -141,7 +154,6 @@ class OrderController extends Controller
             // تحميل علاقة القسم لاستخدامها في حساب الضريبة الديناميكية
             $product = Product::with('category')->find($item['product_id']);
             if ($product) {
-                $productIds[] = $product->id;
                 $basePrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
                     ? $product->offer_price
                     : $product->original_price;
@@ -173,6 +185,7 @@ class OrderController extends Controller
         // 🔥 معالجة الكوبون مع تشخيص
         $couponId = null;
         $discountAmount = 0;
+        $calculatedTotalPrice = $taxResult['total'];
         $finalPrice = $calculatedTotalPrice;
 
         if ($request->filled('coupon_code')) {
