@@ -135,36 +135,38 @@ class OrderController extends Controller
         $calculatedSubtotal = 0;
         $calculatedTotalPrice = 0;
         $validatedItems = [];
-        $vatRate = 0.15;
         $productIds = [];
 
         foreach ($request->input('items') as $item) {
-            $product = Product::find($item['product_id']);
+            // تحميل علاقة القسم لاستخدامها في حساب الضريبة الديناميكية
+            $product = Product::with('category')->find($item['product_id']);
             if ($product) {
                 $productIds[] = $product->id;
                 $basePrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
                     ? $product->offer_price
                     : $product->original_price;
 
-                $itemSubtotal = $basePrice * $item['quantity'];
-                $calculatedSubtotal += $itemSubtotal;
-
-                $priceWithVat = $basePrice * (1 + $vatRate);
-                $itemTotalPrice = $priceWithVat * $item['quantity'];
-                $calculatedTotalPrice += $itemTotalPrice;
-
+                // تجميع بيانات المنتجات لحساب الضريبة لاحقاً، بدون تضمين الضريبة في base_price
                 $validatedItems[] = [
-                    'product' => $product,
-                    'quantity' => $item['quantity'],
-                    'price' => $priceWithVat
+                    'product'    => $product,
+                    'quantity'   => $item['quantity'],
+                    'base_price' => (float) $basePrice,
                 ];
             }
         }
 
-        $totalVatAmount = $calculatedTotalPrice - $calculatedSubtotal;
+        // حساب الضريبة باستخدام TaxService (كل منتج بمعدله الخاص)
+        $taxService = app(\App\Services\TaxService::class);
+        $taxResult  = $taxService->calculateOrderTax($validatedItems);
 
-        // 🔥🔥🔥 تخزين السعر في Cache بدل Session
-        Cache::put('order_total_' . $buyer->id, $calculatedTotalPrice, 3600); // ساعة كاملة
+        // تجميع معرفات المنتجات للكاش Cache
+        foreach ($validatedItems as $vi) {
+            $productIds[] = $vi['product']->id;
+        }
+        $productIds = array_unique($productIds);
+
+        // تخزين البيانات في Cache لاستخدامها في عملية الدفع لاحقاً
+        Cache::put('order_total_' . $buyer->id, $taxResult['total'], 3600);
         Cache::put('order_product_ids_' . $buyer->id, $productIds, 3600);
         Cache::put('order_items_' . $buyer->id, $request->input('items'), 3600);
 
@@ -209,19 +211,19 @@ class OrderController extends Controller
                 }
 
                 if ($validation['valid']) {
-                    $discountAmount = $coupon->calculateDiscount($calculatedTotalPrice);
-                    $finalPrice = $calculatedTotalPrice - $discountAmount;
+                    $discountAmount = $coupon->calculateDiscount($taxResult['total']);
+                    $finalPrice = $taxResult['total'] - $discountAmount;
                     $couponId = $coupon->id;
 
                     $coupon->increment('used_count');
 
                     CouponUsage::create([
                         'coupon_id' => $coupon->id,
-                        'user_id' => $buyer->id,
-                        'order_id' => null,
-                        'discount_amount' => $discountAmount,
-                        'order_total_before_discount' => $calculatedTotalPrice,
-                        'order_total_after_discount' => $finalPrice
+                        'user_id'   => $buyer->id,
+                        'order_id'  => null,
+                        'discount_amount'              => $discountAmount,
+                        'order_total_before_discount'  => $taxResult['total'],
+                        'order_total_after_discount'   => $taxResult['total'] - $discountAmount
                     ]);
                 }
             } else {
@@ -233,22 +235,26 @@ class OrderController extends Controller
         }
 
         $order = Order::create([
-            'user_id' => $buyer->id,
-            'seller_id' => $request->seller_id,
-            'total_price' => round($finalPrice, 2),
-            'status' => 'pending',
-            'payment_status' => 'unpaid',
-            'payment_method' => $request->input('payment_method', 'wallet'),
-            'shipping_address_title' => $request->shipping_address_title,
+            'user_id'                  => $buyer->id,
+            'seller_id'                => $request->seller_id,
+            'total_price'              => round($taxResult['total'] - $discountAmount, 2),
+            'subtotal_before_tax'      => $taxResult['subtotal'],
+            'tax_amount'               => $taxResult['tax_amount'],
+            'tax_breakdown'            => $taxResult['breakdown'],
+            'status'                   => 'pending',
+            'payment_status'           => 'unpaid',
+            'payment_method'           => $request->input('payment_method', 'wallet'),
+            'shipping_address_title'   => $request->shipping_address_title,
             'shipping_address_details' => $request->shipping_address_details,
-            'customer_notes' => $request->customer_notes,
-            'coupon_id' => $couponId,
-            'discount_amount' => round($discountAmount, 2),
-            'status_timeline' => [
+            'customer_notes'           => $request->customer_notes,
+            'coupon_id'                => $couponId,
+            'discount_amount'          => round($discountAmount, 2),
+            'commission_rate_snapshot' => 0, // تُحدد وقت الدفع
+            'status_timeline'          => [
                 [
                     'status' => 'pending',
-                    'title' => 'تم استلام الطلب بنجاح وهو قيد الانتظار وبانتظار الدفع',
-                    'time' => now()->toDateTimeString()
+                    'title'  => 'تم استلام الطلب بنجاح وهو قيد الانتظار وبانتظار الدفع',
+                    'time'   => now()->toDateTimeString()
                 ]
             ]
         ]);
@@ -266,7 +272,11 @@ class OrderController extends Controller
         foreach ($validatedItems as $validatedItem) {
             $syncData[$validatedItem['product']->id] = [
                 'quantity' => $validatedItem['quantity'],
-                'price' => round($validatedItem['price'], 2)
+                // حفظ سعر الوحدة شاملاً الضريبة في الجدول الوسيط
+                'price' => round(
+                    $validatedItem['base_price'] * (1 + $validatedItem['product']->effectiveTaxRate() / 100),
+                    2
+                ),
             ];
             $validatedItem['product']->increment('sales_count', $validatedItem['quantity']);
         }
@@ -278,16 +288,17 @@ class OrderController extends Controller
         // Cache::forget('order_items_' . $buyer->id);
 
         return response()->json([
-            'success' => true,
-            'message' => 'Order created successfully. Please proceed to payment.',
-            'order_id' => $order->id,
-            'order_status' => 'pending',
+            'success'         => true,
+            'message'         => 'Order created successfully. Please proceed to payment.',
+            'order_id'        => $order->id,
+            'order_status'    => 'pending',
             'pricing_details' => [
-                'subtotal_before_vat' => round($calculatedSubtotal, 2),
-                'vat_amount' => round($totalVatAmount, 2),
-                'total_before_discount' => round($calculatedTotalPrice, 2),
-                'discount_amount' => round($discountAmount, 2),
-                'total_after_discount' => round($finalPrice, 2)
+                'subtotal_before_tax' => $taxResult['subtotal'],
+                'tax_amount'          => $taxResult['tax_amount'],
+                'total_after_tax'     => $taxResult['total'],
+                'discount_amount'     => round($discountAmount, 2),
+                'final_total'         => round($taxResult['total'] - $discountAmount, 2),
+                'tax_breakdown'       => $taxResult['breakdown'],
             ]
         ], 201);
     }

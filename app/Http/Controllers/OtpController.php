@@ -36,7 +36,7 @@ class OtpController extends Controller
             return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
         }
 
-        if ($request->method === 'email') {
+        if ($request->input('method') === 'email') {
             $sent = $this->otpService->sendRegistrationOtpViaEmail($request->email, $request->first_name);
             $identifier = $request->email;
         } else {
@@ -50,8 +50,8 @@ class OtpController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => "OTP sent successfully to your {$request->method}.",
-            'method'  => $request->method,
+            'message' => "OTP sent successfully to your {$request->input('method')}.",
+            'method'  => $request->input('method'),
         ], 200);
     }
 
@@ -378,13 +378,13 @@ class OtpController extends Controller
 
         $user->update([
             'two_factor_enabled' => $request->enabled,
-            'two_factor_method'  => $request->enabled ? $request->method : $user->two_factor_method,
+            'two_factor_method'  => $request->enabled ? $request->input('method') : $user->two_factor_method,
         ]);
 
         return response()->json([
             'success'            => true,
             'message'            => $request->enabled
-                ? "Two-Factor Authentication enabled via {$request->method}."
+                ? "Two-Factor Authentication enabled via {$request->input('method')}."
                 : 'Two-Factor Authentication has been disabled.',
             'two_factor_enabled' => $user->two_factor_enabled,
             'two_factor_method'  => $user->two_factor_method,

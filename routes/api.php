@@ -2,6 +2,7 @@
 use App\Http\Controllers\AdController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AdminSettingsController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\InvoiceController;
@@ -11,6 +12,7 @@ use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
 use App\Http\Controllers\ProductController;
+use App\Http\Controllers\StaffController;
 use App\Http\Controllers\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -24,6 +26,9 @@ Route::Post('login', [UserController::class, 'login']);
 Route::post('register/buyer', [UserController::class, 'registerBuyer']);
 Route::post('register/seller', [UserController::class, 'registerSeller']);
 Route::post('logout', [UserController::class, 'logout'])->middleware('auth:sanctum');
+
+// قبول دعوة الموظف (لا يحتاج Token)
+Route::post('auth/staff/accept-invite', [StaffController::class, 'acceptInvite']);
 
 // ─── OTP & Password Reset (Public) ────────────────────────────────────────
 
@@ -144,6 +149,22 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('merchant/departments/{id}/update', [MerchantDepartment::class, 'updateDepartment']);
     Route::delete('merchant/departments/{id}', [MerchantDepartment::class, 'destroyDepartment']);
 
+    // 📌 مسارات الفروع / المستودعات للتاجر
+    Route::get('merchant/branches', [App\Http\Controllers\BranchController::class, 'index']);
+    Route::post('merchant/branches', [App\Http\Controllers\BranchController::class, 'store']);
+    Route::get('merchant/branches/{id}', [App\Http\Controllers\BranchController::class, 'show']);
+    Route::put('merchant/branches/{id}', [App\Http\Controllers\BranchController::class, 'update']);
+    Route::patch('merchant/branches/{id}/toggle', [App\Http\Controllers\BranchController::class, 'toggleActive']);
+    Route::delete('merchant/branches/{id}', [App\Http\Controllers\BranchController::class, 'destroy']);
+
+    // 📌 مسارات إدارة الموظفين للتاجر (Staff Management)
+    Route::get('seller/staff', [StaffController::class, 'index']);
+    Route::post('seller/staff/invite', [StaffController::class, 'invite']);
+    Route::get('seller/staff/invitations', [StaffController::class, 'pendingInvitations']);
+    Route::delete('seller/staff/invitations/{id}', [StaffController::class, 'cancelInvitation']);
+    Route::put('seller/staff/{id}/permissions', [StaffController::class, 'updatePermissions']);
+    Route::patch('seller/staff/{id}/toggle-status', [StaffController::class, 'toggleStatus']);
+    Route::delete('seller/staff/{id}', [StaffController::class, 'removeStaff']);
 });
 Route::middleware('auth:sanctum')->group(function () {
 
@@ -162,8 +183,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('variants/{id}/toggle', [ProductController::class, 'toggleVariant'])->middleware('auth:sanctum');
 
 
-    Route::get('wholesale/invoices', [InvoiceController::class, 'getInvoices'])->middleware('auth:sanctum');
-    Route::get('wholesale/reports/vat', [InvoiceController::class, 'getVatReport'])->middleware('auth:sanctum');
+    // Invoices (Expanded)
+    Route::get('invoices', [InvoiceController::class, 'getInvoices'])->middleware('auth:sanctum');
+    Route::get('invoices/order/{orderId}', [InvoiceController::class, 'getOrderInvoice'])->middleware('auth:sanctum');
+    Route::get('invoices/commission', [InvoiceController::class, 'getCommissionInvoices'])->middleware('auth:sanctum');
+    Route::get('invoices/tax-report', [InvoiceController::class, 'getTaxReport'])->middleware('auth:sanctum');
 
 
 
@@ -232,6 +256,17 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // إحصائيات الإعلانات
     Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'isSuperAdmin']);
+
+    // إدارة الأقسام والتصنيفات (Admin Category Management)
+    Route::post('categories/store', [CategoryController::class, 'storeCategory'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::post('categories/{id}/update', [CategoryController::class, 'updateCategory'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::delete('categories/{id}/destroy', [CategoryController::class, 'destroyCategory'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::patch('categories/toggle-visibility', [CategoryController::class, 'toggleVisibility'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::patch('categories/reorder', [CategoryController::class, 'reorderCategories'])->middleware(['auth:sanctum', 'super_admin']);
+
+    // إعدادات المنصة (Admin Settings - Platform commission control)
+    Route::get('admin/settings', [AdminSettingsController::class, 'index'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::put('admin/settings/{key}', [AdminSettingsController::class, 'update'])->middleware(['auth:sanctum', 'super_admin']);
 });
 
 

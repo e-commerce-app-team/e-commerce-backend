@@ -36,6 +36,8 @@ class User extends Authenticatable
         'category',
         'status',
         'role',
+        'permissions',
+        'seller_id',
         'balance',
         'payout_method',
         'payout_account',
@@ -66,6 +68,7 @@ class User extends Authenticatable
             'balance'             => 'decimal:2',
             'working_hours'       => 'array',
             'social_links'        => 'array',
+            'permissions'         => 'array',
             'two_factor_enabled'  => 'boolean',
         ];
     }
@@ -142,6 +145,20 @@ class User extends Authenticatable
     public function products()
     {
         return $this->hasMany(Product::class, 'user_id');
+    }
+
+    // ============================================================
+    // 🔥 علاقات الموظفين (Staff Management)
+    // ============================================================
+
+    public function staffMembers()
+    {
+        return $this->hasMany(User::class, 'seller_id');
+    }
+
+    public function seller()
+    {
+        return $this->belongsTo(User::class, 'seller_id');
     }
 
     // ============================================================

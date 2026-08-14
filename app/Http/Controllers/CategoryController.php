@@ -11,26 +11,16 @@ use Illuminate\Support\Facades\Storage;
 
 class CategoryController extends Controller
 {
-    // 1. عرض الشجرة كاملة (تبدأ بالأقسام الرئيسية وتنزل للأعماق)
-   /*  public function getAllCategories(): JsonResponse
-    {
-        $categories = Category::whereNull('parent_id')
-            ->with(['recursiveChildren']) // جلب الشجرة عودياً
-            ->orderBy('order_position', 'asc')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => $categories
-        ], 200);
-    }
-
     // 2. إنشاء قسم جديد (رئيسي أو فرعي في أي مستوى)
-    public function storeDepartment(CategorySaveRequest $request): JsonResponse
+    public function storeCategory(CategorySaveRequest $request): JsonResponse
     {
-
         $validated = $request->validated();
-        $validated['slug'] = Str::slug($validated['name']);
+        
+        $slugSource = $validated['name'];
+        if (is_array($validated['name'])) {
+            $slugSource = $validated['name']['en'] ?? reset($validated['name']) ?? '';
+        }
+        $validated['slug'] = Str::slug($slugSource);
 
         if ($request->hasFile('image')) {
             $validated['image_url'] = $request->file('image')->store('categories/images', 'public');
@@ -50,12 +40,10 @@ class CategoryController extends Controller
     }
 
     // 3. تعديل بيانات قسم معين
-    public function updateDepartment(CategorySaveRequest $request, $id): JsonResponse
+    public function updateCategory(CategorySaveRequest $request, $id): JsonResponse
     {
-        // استخدام find بدلاً من findOrFail لكي لا يرمي خطأ تلقائي
         $category = Category::find($id);
 
-        // إذا لم يجد القسم في قاعدة البيانات
         if (!$category) {
             return response()->json([
                 'success' => false,
@@ -66,7 +54,11 @@ class CategoryController extends Controller
         $validated = $request->validated();
 
         if (isset($validated['name'])) {
-            $validated['slug'] = Str::slug($validated['name']);
+            $slugSource = $validated['name'];
+            if (is_array($validated['name'])) {
+                $slugSource = $validated['name']['en'] ?? reset($validated['name']) ?? '';
+            }
+            $validated['slug'] = Str::slug($slugSource);
         }
 
         if ($request->hasFile('image')) {
@@ -92,26 +84,21 @@ class CategoryController extends Controller
         ], 200);
     }
 
-
     public function toggleVisibility(Request $request): JsonResponse
     {
-        // 1. التحقق من المدخلات: يجب إرسال رقم القسم (id) والـ status (إما show أو hide)
         $request->validate([
             'id' => 'required|exists:categories,id',
             'status' => 'required|in:show,hide'
         ]);
 
-        // 2. جلب القسم المطلوب تعديله
         $category = Category::find($request->id);
 
-        // 3. تعديل قيمة الحقل بناءً على الكلمة القادمة
         if ($request->status === 'show') {
-            $category->is_visible = true; // تحويله إلى ظاهر (1)
+            $category->is_visible = true; 
         } elseif ($request->status === 'hide') {
-            $category->is_visible = false; // تحويله إلى مخفي (0)
+            $category->is_visible = false; 
         }
 
-        // 4. حفظ التعديل في قاعدة البيانات
         $category->save();
 
         return response()->json([
@@ -120,14 +107,16 @@ class CategoryController extends Controller
             'data' => $category
         ], 200);
     }
+
     // 5. تحديث ترتيب الأقسام بالسحب والإفلات (Drag & Drop)
-    public function reorderDepartment(Request $request): JsonResponse
+    public function reorderCategories(Request $request): JsonResponse
     {
         $request->validate([
             'positions' => 'required|array',
             'positions.*.id' => 'required|exists:categories,id',
             'positions.*.order_position' => 'required|integer',
         ]);
+        
         foreach ($request->input('positions') as $item) {
             Category::where('id', $item['id'])->update(['order_position' => $item['order_position']]);
         }
@@ -139,12 +128,10 @@ class CategoryController extends Controller
     }
 
     // 6. حذف قسم (سيحذف الفروع التابعة له تلقائياً بسبب cascade)
-    public function destroyDepartment($id): JsonResponse
+    public function destroyCategory($id): JsonResponse
     {
-        // البحث عن القسم
         $category = Category::find($id);
 
-        // إذا لم يجد القسم في قاعدة البيانات عند محاولة الحذف
         if (!$category) {
             return response()->json([
                 'success' => false,
@@ -152,7 +139,6 @@ class CategoryController extends Controller
             ], 404);
         }
 
-        // إذا وُجد القسم، يتم إكمال عملية الحذف وحذف ملفاته
         if ($category->image_url) {
             Storage::disk('public')->delete($category->image_url);
         }
@@ -167,7 +153,7 @@ class CategoryController extends Controller
             'message' => 'Category and its subcategories deleted successfully.'
         ], 200);
     }
- */
+
     // عرض الشجرة كاملة للتصنيفات العامة في السيستم
     public function getAllCategories(): JsonResponse
     {

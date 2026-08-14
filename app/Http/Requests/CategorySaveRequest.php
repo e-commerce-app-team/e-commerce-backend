@@ -24,7 +24,7 @@ class CategorySaveRequest extends FormRequest
     {
         $isUpdate = $this->route('id') !== null;
         return [
-            'name' => $isUpdate ? 'sometimes|required|string|max:255' : 'required|string|max:255',
+            'name' => $isUpdate ? 'sometimes|required' : 'required',
             'parent_id' => 'nullable|exists:categories,id', 
             'image' => 'nullable|image|mimes:jpeg,png,jpg,webp|max:2048', 
             'icon' => 'nullable|image|mimes:jpeg,png,jpg,svg,webp|max:1048', 

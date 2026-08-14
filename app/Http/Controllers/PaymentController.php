@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\Transaction;
+use App\Services\InvoiceService;
+use App\Services\TaxService;
 use DB;
 use Hash;
 use Illuminate\Http\Request;
@@ -214,44 +216,51 @@ class PaymentController extends Controller
             // 1. خصم الرصيد الكلي من المشتري
             $user->decrement('balance', $order->total_price);
 
-            // 2. حساب رصيد التاجر بعد العمولات
-            $seller = $order->seller;
-            $totalAmount = $order->total_price;
-            $commissionRate = ($seller->role === 'wholesale') ? 0.05 : 0.10;
-            $adminCommission = $totalAmount * $commissionRate;
-            $sellerProfit = $totalAmount - $adminCommission;
+            // 2. حساب العمولة ديناميكياً من PlatformSettings
+            $seller          = $order->seller;
+            $totalAmount     = $order->total_price;
+            $taxService      = app(TaxService::class);
+            $commissionResult = $taxService->calculateCommission($totalAmount, $seller->role);
+            $adminCommission = $commissionResult['commission'];
+            $sellerProfit    = $commissionResult['net'];
+            $commissionRate  = $commissionResult['rate'];
 
-            // 3. شحن رصيد البائع الإجمالي (لكنه سيبقى محجوزاً برمجياً بالاعتماد على تاريخ الاستلام/الشحن)
+            // 3. شحن رصيد البائع (محجوز برمجياً بانتظار الاستلام)
             $seller->increment('balance', $sellerProfit);
 
-            // 4. تعديل حالة الدفع إلى "مدفوع ومحجوز بضمان" والطلب يبقى pending
+            // 4. تحديث حالة الدفع وتسجيل snapshot العمولة
             $order->update([
-                'payment_status' => 'paid_escrow'
+                'payment_status'            => 'paid_escrow',
+                'platform_commission'       => $adminCommission,
+                'commission_rate_snapshot'  => $commissionRate,
             ]);
 
             // 5. تسجيل الحركات المالية في النظام
             Transaction::create([
-                'user_id' => $user->id,
-                'order_id' => $order->id,
-                'type' => 'payment',
-                'amount' => $totalAmount,
+                'user_id'     => $user->id,
+                'order_id'    => $order->id,
+                'type'        => 'payment',
+                'amount'      => $totalAmount,
                 'description' => "Paid for Order #{$order->id} (Held in Escrow)"
             ]);
 
             Transaction::create([
-                'user_id' => $seller->id,
-                'order_id' => $order->id,
-                'type' => 'deposit',
-                'amount' => $sellerProfit,
-                'description' => "Escrow earnings from Order #{$order->id}"
+                'user_id'     => $seller->id,
+                'order_id'    => $order->id,
+                'type'        => 'deposit',
+                'amount'      => $sellerProfit,
+                'description' => "Escrow earnings from Order #{$order->id} (commission {$commissionRate}%)"
             ]);
 
             return response()->json([
-                'success' => true,
-                'message' => 'Payment successful. Funds locked in escrow until shipping and delivery confirmation.',
-                'new_balance' => $user->balance,
-                'order_status' => 'pending',
-                'payment_status' => 'paid_escrow'
+                'success'          => true,
+                'message'          => 'Payment successful. Funds locked in escrow until shipping and delivery confirmation.',
+                'new_balance'      => $user->balance,
+                'order_status'     => 'pending',
+                'payment_status'   => 'paid_escrow',
+                'commission_rate'  => $commissionRate,
+                'platform_commission' => $adminCommission,
+                'seller_net'       => $sellerProfit,
             ], 200);
         });
     }
@@ -298,34 +307,26 @@ class PaymentController extends Controller
             $timeline = $order->status_timeline ?? [];
             $timeline[] = [
                 'status' => 'delivered',
-                'title' => 'Buyer confirmed delivery. Funds unlocked successfully.',
-                'time' => now()->toDateTimeString()
+                'title'  => 'Buyer confirmed delivery. Funds unlocked successfully.',
+                'time'   => now()->toDateTimeString()
             ];
 
             // تحويل حالة الطلب إلى delivered والدفع إلى مكتمل تماماً
             $order->update([
-                'status' => 'delivered',
-                'payment_status' => 'released',
-                'delivered_at' => now(), // توثيق وقت التحرير المباشر
+                'status'          => 'delivered',
+                'payment_status'  => 'released',
+                'delivered_at'    => now(),
                 'status_timeline' => $timeline
             ]);
 
-            // توليد الفاتورة الضريبية الآن بعد البيع النهائي الفعلي
-            $seller = $order->seller;
-            if ($seller->role === 'wholesale') {
-                $total = $order->total_price;
-                $subtotal = $total / 1.15;
-                $vatAmount = $total - $subtotal;
+            // 🔥 توليد الفواتير باستخدام InvoiceService
+            $invoiceService = app(InvoiceService::class);
 
-                Invoice::create([
-                    'user_id' => $seller->id,
-                    'invoice_number' => 'INV-' . date('Y') . '-' . str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT),
-                    'subtotal' => round($subtotal, 2),
-                    'vat_amount' => round($vatAmount, 2),
-                    'total' => round($total, 2),
-                    'pdf_path' => null
-                ]);
-            }
+            // فاتورة ضريبية: wholesale فقط
+            $invoiceService->generateOrderInvoice($order);
+
+            // فاتورة عمولة المنصة: لكل التجار (vendor + wholesale)
+            $invoiceService->generateCommissionInvoice($order);
         });
 
         return response()->json([

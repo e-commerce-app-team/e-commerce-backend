@@ -9,24 +9,22 @@ use Illuminate\Support\Facades\Mail;
 
 class OtpService
 {
-    /**
-     * توليد رمز OTP عشوائي من 6 أرقام وحفظه للمستخدم مع وقت انتهاء الصلاحية.
-     */
+    
+  
+     
     public function generateAndSave(User $user): string
     {
         $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
         $user->update([
             'otp_code'        => $otp,
-            'otp_expires_at'  => now()->addMinute(), // صالح لمدة دقيقة واحدة فقط
+            'otp_expires_at'  => now()->addMinute(), 
         ]);
 
         return $otp;
     }
 
-    /**
-     * إرسال الـ OTP عبر البريد الإلكتروني.
-     */
+   
     public function sendViaEmail(User $user, string $purpose = 'verification'): bool
     {
         $otp = $this->generateAndSave($user);
@@ -55,7 +53,7 @@ class OtpService
         ];
 
         $purposeText = $purposeMessages[$purpose] ?? 'رمز التحقق';
-        $message     = "🛡 منصة التجارة الإلكترونية\n\n{$purposeText} هو:\n\n*{$otp}*\n\n⏱ صالح لمدة دقيقة واحدة فقط.\n\n⚠️ لا تشارك هذا الرمز مع أحد.";
+        $message     = "🛡NEXUS منصة التجارة الإلكترونية\n\n{$purposeText} هو:\n\n*{$otp}*\n\n⏱ صالح لمدة دقيقة واحدة فقط.\n\n⚠️ لا تشارك هذا الرمز مع أحد.";
 
         $params = [
             'token' => env('ULTRAMSG_TOKEN'),
@@ -87,13 +85,17 @@ class OtpService
             return false;
         }
 
+        $responseData = json_decode($response, true);
+        if (isset($responseData['error'])) {
+            Log::error("UltraMsg OTP API Error for {$user->phone}: " . $responseData['error']);
+            return false;
+        }
+
         Log::info("UltraMsg OTP sent to {$user->phone}: $response");
         return true;
     }
 
-    /**
-     * إرسال الـ OTP عبر القناة المفضلة للمستخدم (للـ 2FA).
-     */
+   
     public function sendViaPreferredMethod(User $user, string $purpose = 'login_2fa'): bool
     {
         return $user->two_factor_method === 'phone'
@@ -141,7 +143,7 @@ class OtpService
     {
         $otp = $this->generateAndCacheOtp($phone);
 
-        $message = "🛡 منصة التجارة الإلكترونية\n\nرمز التحقق لتفعيل حسابك هو:\n\n*{$otp}*\n\n⏱ صالح لمدة 5 دقائق.";
+        $message = "  \n🛡NEXUS منصة التجارة الإلكترونية\n\nرمز التحقق لتفعيل حسابك هو:\n\n*{$otp}*\n\n⏱ صالح لمدة دقيقة.";
 
         $params = [
             'token' => env('ULTRAMSG_TOKEN'),
@@ -170,6 +172,12 @@ class OtpService
 
         if ($err) {
             Log::error("Registration UltraMsg OTP Error for {$phone}: $err");
+            return false;
+        }
+
+        $responseData = json_decode($response, true);
+        if (isset($responseData['error'])) {
+            Log::error("Registration UltraMsg OTP API Error for {$phone}: " . $responseData['error']);
             return false;
         }
 

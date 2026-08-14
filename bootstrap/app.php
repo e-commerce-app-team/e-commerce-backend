@@ -12,7 +12,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        // --- هذا الجزء هو الناقص عندك ---
+        $middleware->api(prepend: [
+            \App\Http\Middleware\SetLocale::class,
+        ]);
+
         $middleware->alias([
             'isUsersAdmin' => \App\Http\Middleware\IsUsersAdmin::class,
             'isOrdersAdmin' => \App\Http\Middleware\IsOrdersAdmin::class,

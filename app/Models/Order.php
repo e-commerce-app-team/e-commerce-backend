@@ -26,13 +26,24 @@ class Order extends Model
         // 🔥 إضافة حقل الكوبون
         'coupon_id',
         'discount_amount',
+        // 🧾 حقول النظام الضريبي والعمولة
+        'subtotal_before_tax',
+        'tax_amount',
+        'tax_breakdown',
+        'platform_commission',
+        'commission_rate_snapshot',
     ];
 
     protected $casts = [
         'status_timeline' => 'array',
-        'total_price' => 'decimal:2',
-        'shipped_at' => 'datetime',
-        'delivered_at' => 'datetime',
+        'tax_breakdown'   => 'array',
+        'total_price'     => 'decimal:2',
+        'subtotal_before_tax' => 'decimal:2',
+        'tax_amount'     => 'decimal:2',
+        'platform_commission' => 'decimal:2',
+        'commission_rate_snapshot' => 'decimal:2',
+        'shipped_at'     => 'datetime',
+        'delivered_at'   => 'datetime',
         'estimated_delivery_date' => 'datetime',
         'discount_amount' => 'decimal:2',
     ];

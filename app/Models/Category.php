@@ -9,13 +9,35 @@ class Category extends Model
 {
     use HasFactory;
 
-  protected $fillable = [
-        'parent_id', 'name', 'slug', 'image_url', 'icon_url', 'order_position', 'is_visible'
+    protected $fillable = [
+        'parent_id', 'name', 'slug', 'image_url', 'icon_url', 'order_position', 'is_visible',
+        'tax_rate', 'tax_label',
     ];
 
     protected $casts = [
         'is_visible' => 'boolean',
+        'tax_rate'   => 'decimal:2',
     ];
+
+    public function getNameAttribute($value)
+    {
+        $translations = json_decode($value, true);
+        if (is_array($translations)) {
+            $locale = app()->getLocale();
+            // If the specific locale isn't found, fallback to Arabic then English then the original value
+            return $translations[$locale] ?? $translations['ar'] ?? $translations['en'] ?? $value;
+        }
+        return $value;
+    }
+
+    public function setNameAttribute($value)
+    {
+        if (is_array($value)) {
+            $this->attributes['name'] = json_encode($value, JSON_UNESCAPED_UNICODE);
+        } else {
+            $this->attributes['name'] = $value;
+        }
+    }
 
     // علاقة جلب القسم الأب مباشرة
     public function parent()
