@@ -11,7 +11,7 @@ class Order extends Model
 
     protected $fillable = [
         'user_id',
-        'seller_id',
+        //'seller_id',
         'total_price',
         'status',
         'payment_method',
@@ -121,4 +121,9 @@ class Order extends Model
     {
         return $this->discount_amount ?? 0;
     }
+
+    public function subOrders()
+{
+    return $this->hasMany(SubOrder::class);
+}
 }

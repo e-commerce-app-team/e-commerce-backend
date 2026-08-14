@@ -106,4 +106,14 @@ class Product extends Model
         }
         return $this->category?->tax_label ?? ('ضريبة مبيعات ' . $this->effectiveTaxRate() . '%');
     }
+
+    public function store()
+    {
+        return $this->belongsTo(User::class, 'seller_id');
+    }
+
+    public function favorites()
+    {
+        return $this->hasMany(Favorite::class);
+    }
 }

@@ -451,4 +451,105 @@ class ProductController extends Controller
             'data' => $products
         ], 200);
     }
+    
+    //فلاتر: الأقسام، السعر، التقييم، الشحن المجاني، العروض فقط
+    public function FilttetByForBuyer(Request $request)
+    {
+        // 1. بدء استعلام الـ Query Builder بدون تنفيذ
+        $query = Product::query();
+
+        // 🔥 [الفلتر 1]: الأقسام (يجلب منتجات القسم نفسه وأقسامه الفرعية)
+        if ($request->has('department_id') && !empty($request->department_id)) {
+            $catId = $request->department_id;
+            $query->where(function ($q) use ($catId) {
+                $q->where('department_id', $catId)
+                    ->orWhereHas('department', function ($subQ) use ($catId) {
+                        $subQ->where('parent_id', $catId);
+                    });
+            });
+        }
+
+        // 🔥 [الفلتر 2]: السعر (أقل سعر وأعلى سعر)
+        if ($request->has('min_price') && !empty($request->min_price)) {
+            $query->where('original_price', '>=', $request->min_price);
+        }
+        if ($request->has('max_price') && !empty($request->max_price)) {
+            $query->where('original_price', '<=', $request->max_price);
+        }
+
+        // 🔥 [الفلتر 3]: التقييم (مثلاً المنتجات اللي تقييمها 4 نجوم وأكير)
+        if ($request->has('rating') && !empty($request->rating)) {
+            $query->where('rating', '>=', $request->rating);
+        }
+
+        // 🔥 [الفلتر 4]: الشحن المجاني (يتوقع حقل boolean في جدول المنتجات اسمه is_free_shipping أو مشابه)
+        if ($request->has('free_shipping') && $request->free_shipping == '1') {
+            $query->where('is_free_shipping', 1);
+        }
+
+        // 🔥 [الفلتر 5]: العروض والخصومات فقط
+        if ($request->has('has_discount') && $request->has_discount == '1') {
+            // إذا كان عندك حقل السعر بعد الخصم اسمه discount_price، بنجيب المنتجات اللي سعر خصمها أكبر من 0
+            $query->where('offer_price', '>', 0);
+        }
+
+        // 2. تنفيذ الاستعلام النهائي وجلب البيانات للفرونت آيند
+        $products = $query
+            //select('id', 'name', 'product_price', 'discount_price', 'is_free_shipping', 'rating', 'image')
+            ->get(); // أو فيكي تستخدمي paginate(15) لتقسيم الصفحات
+
+        return response()->json([
+            'success' => true,
+            'data' => $products
+        ], 200);
+    }
+
+    // تابع جلب بيانات منتج معين حسب ال id  اي بشكل عام بيانات المنتج التفصيلية ولاي متجر تابع 
+    public function showProductDetails($id)
+    {
+        $product = \App\Models\Product::with([
+            'variants',
+            'seller:id,store_name,store_logo,store_description'
+        ])->find($id);
+
+        if (!$product) {
+            return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
+        }
+
+        // جلب منتجات مشابهة (مثلاً في نفس القسم أو نفس المتجر)
+        $similarProducts = \App\Models\Product::where('department_id', $product->department_id)
+            ->where('id', '!=', $id)
+            ->limit(4)
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'product' => $product,
+                'similar_products' => $similarProducts,
+                'reviews_placeholder' => "نظام التقييمات قيد التطوير"
+            ]
+        ], 200);
+    }
+
+
+    // تسجيل مشاهدة لمنتج معين
+
+    public function incrementViews($id)
+    {
+        $product = \App\Models\Product::find($id);
+
+        if (!$product) {
+            return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
+        }
+
+        // زيادة قيمة المشاهدات بمقدار 1
+        $product->increment('views');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'تم تسجيل المشاهدة بنجاح',
+            'views_count' => $product->views
+        ], 200);
+    }
 }
