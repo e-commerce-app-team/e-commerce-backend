@@ -134,7 +134,7 @@ class ChatController extends Controller
         $blocked = BlockedUser::with('blocked:id,first_name,last_name,email,profile_photo')
             ->where('blocker_id', Auth::id())
             ->get();
-            
+
         return response()->json($blocked);
     }
 
@@ -161,7 +161,7 @@ class ChatController extends Controller
         $block = BlockedUser::where('blocker_id', Auth::id())
             ->where('blocked_id', $id)
             ->firstOrFail();
-            
+
         $block->delete();
 
         return response()->json(['message' => 'User unblocked successfully']);

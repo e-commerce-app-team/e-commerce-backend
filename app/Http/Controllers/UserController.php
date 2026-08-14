@@ -31,7 +31,7 @@ class UserController extends Controller
     {
         // 1. التحقق من صحة البيانات المدخلة
         $request->validate([
-            'login'    => 'required|string',
+            'login' => 'required|string',
             'password' => 'required|string',
         ]);
 
@@ -47,10 +47,10 @@ class UserController extends Controller
 
             // 4. التحقق من حالة الحساب
             if ($user->status !== 'approved') {
-                $message = match($user->status) {
-                    'pending'  => 'Your account is pending admin approval. Please wait for activation.',
+                $message = match ($user->status) {
+                    'pending' => 'Your account is pending admin approval. Please wait for activation.',
                     'rejected' => 'Your account has been rejected. Please contact support.',
-                    default    => 'Your account is currently inactive.',
+                    default => 'Your account is currently inactive.',
                 };
                 Auth::logout();
                 return response()->json(['success' => false, 'message' => $message], 403);
@@ -65,12 +65,12 @@ class UserController extends Controller
                 Auth::logout();
 
                 return response()->json([
-                    'success'      => true,
+                    'success' => true,
                     'requires_otp' => true,
-                    'message'      => 'A verification code has been sent to your ' . $user->two_factor_method . '.',
-                    'user_id'      => $user->id,
-                    'method'       => $user->two_factor_method,
-                    'masked_to'    => $user->two_factor_method === 'email'
+                    'message' => 'A verification code has been sent to your ' . $user->two_factor_method . '.',
+                    'user_id' => $user->id,
+                    'method' => $user->two_factor_method,
+                    'masked_to' => $user->two_factor_method === 'email'
                         ? $this->maskEmail($user->email)
                         : $this->maskPhone($user->phone),
                 ], 202);
@@ -79,40 +79,40 @@ class UserController extends Controller
             // 6. تسجيل دخول عادي - توليد التوكن
             $token = $user->createToken('auth_token')->plainTextToken;
 
-            $redirectTo = match($user->role) {
+            $redirectTo = match ($user->role) {
                 'vendor', 'wholesale' => '/seller/home',
-                default               => '/home',
+                default => '/home',
             };
 
-            $roleMessage = match($user->role) {
-                'vendor'    => 'Welcome back, Vendor!',
+            $roleMessage = match ($user->role) {
+                'vendor' => 'Welcome back, Vendor!',
                 'wholesale' => 'Welcome back, Wholesale Vendor!',
-                default     => 'Welcome back, Buyer!',
+                default => 'Welcome back, Buyer!',
             };
 
             return response()->json([
-                'success'      => true,
+                'success' => true,
                 'requires_otp' => false,
-                'message'      => $roleMessage,
+                'message' => $roleMessage,
                 'access_token' => $token,
-                'token_type'   => 'Bearer',
-                'redirect_to'  => $redirectTo,
-                'user'         => [
-                    'id'                 => $user->id,
-                    'first_name'         => $user->first_name,
-                    'last_name'          => $user->last_name,
-                    'name'               => $user->first_name . ' ' . $user->last_name,
-                    'email'              => $user->email,
-                    'phone'              => $user->phone,
-                    'role'               => $user->role,
-                    'status'             => $user->status,
-                    'store_name'         => $user->store_name ?? null,
-                    'category'           => $user->category ?? null,
-                    'email_verified_at'  => $user->email_verified_at?->toDateTimeString(),
-                    'phone_verified_at'  => $user->phone_verified_at?->toDateTimeString(),
-                    'profile_photo'      => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
+                'token_type' => 'Bearer',
+                'redirect_to' => $redirectTo,
+                'user' => [
+                    'id' => $user->id,
+                    'first_name' => $user->first_name,
+                    'last_name' => $user->last_name,
+                    'name' => $user->first_name . ' ' . $user->last_name,
+                    'email' => $user->email,
+                    'phone' => $user->phone,
+                    'role' => $user->role,
+                    'status' => $user->status,
+                    'store_name' => $user->store_name ?? null,
+                    'category' => $user->category ?? null,
+                    'email_verified_at' => $user->email_verified_at?->toDateTimeString(),
+                    'phone_verified_at' => $user->phone_verified_at?->toDateTimeString(),
+                    'profile_photo' => $user->profile_photo ? asset('storage/' . $user->profile_photo) : null,
                     'two_factor_enabled' => $user->two_factor_enabled,
-                    'two_factor_method'  => $user->two_factor_method,
+                    'two_factor_method' => $user->two_factor_method,
                 ],
             ], 200);
         }
@@ -157,11 +157,11 @@ class UserController extends Controller
 
         // 3. تشفير كلمة المرور وتحديد الرتبة والحالة
         $validated['password'] = Hash::make($request->password);
-        $validated['role']     = 'buyer';
-        $validated['status']   = 'approved';
+        $validated['role'] = 'buyer';
+        $validated['status'] = 'approved';
         // التحقق مما إذا كان المستخدم قد قام بالتحقق من الـ OTP مسبقاً (عن طريق الإيميل أو الهاتف)
-        $isVerified = \Illuminate\Support\Facades\Cache::pull('verified_registration_' . $request->email) || 
-                      \Illuminate\Support\Facades\Cache::pull('verified_registration_' . $request->phone);
+        $isVerified = Cache::pull('verified_registration_' . $request->email) ||
+            Cache::pull('verified_registration_' . $request->phone);
 
         // البريد مؤكد إذا تم التحقق من الـ OTP مسبقاً
         $validated['email_verified_at'] = $isVerified ? now() : null;
@@ -174,11 +174,11 @@ class UserController extends Controller
             $this->otpService->sendViaEmail($user, 'verification');
 
             return response()->json([
-                'success'  => true,
-                'message'  => 'Registration successful! Please verify your email address.',
+                'success' => true,
+                'message' => 'Registration successful! Please verify your email address.',
                 'requires_verification' => true,
-                'user_id'  => $user->id,
-                'email'    => $user->email,
+                'user_id' => $user->id,
+                'email' => $user->email,
             ], 201);
         }
 
@@ -186,10 +186,10 @@ class UserController extends Controller
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'success'  => true,
-            'message'  => 'Registration successful!',
-            'user'     => $user,
-            'token'    => $token,
+            'success' => true,
+            'message' => 'Registration successful!',
+            'user' => $user,
+            'token' => $token,
         ], 201);
     }
     public function registerSeller(SellerRegisterRequest $request)
@@ -226,8 +226,8 @@ class UserController extends Controller
 
         // 6. الحفظ
         // التحقق مما إذا كان البائع قد قام بالتحقق من الـ OTP مسبقاً
-        $isVerified = \Illuminate\Support\Facades\Cache::pull('verified_registration_' . $request->email) || 
-                      \Illuminate\Support\Facades\Cache::pull('verified_registration_' . $request->phone);
+        $isVerified = Cache::pull('verified_registration_' . $request->email) ||
+            Cache::pull('verified_registration_' . $request->phone);
 
         $validated['email_verified_at'] = $isVerified ? now() : null;
 
@@ -798,9 +798,9 @@ class UserController extends Controller
                     'icon' => '📢',
                     'description' => 'ظهور في أعلى الشاشة الرئيسية للمشترين',
                     'location' => 'الشاشة الرئيسية',
-                    'price_per_day' => 3000,
+                    'price_per_day' => 2000,
                     'prices' => [
-                        '1_day' => 3000,
+                        '1_day' => 2000,
                         '3_days' => 8000,
                         '1_week' => 15000,
                         '1_month' => 50000,
@@ -916,9 +916,8 @@ class UserController extends Controller
             'status' => 'pending', // يبدأ قيد المراجعة
         ]);
 
-        // خصم التكلفة من المحفظة
-        $user->balance -= $price;
-        $user->save();
+        // ✅ بدلاً من السطرين السابقين
+        $user->decrement('balance', $price);
 
         return response()->json([
             'success' => true,
@@ -1087,7 +1086,7 @@ class UserController extends Controller
     {
         $prices = [
             'banner' => [
-                '1_day' => 3000,
+                '1_day' => 2000,
                 '3_days' => 8000,
                 '1_week' => 15000,
                 '1_month' => 50000,

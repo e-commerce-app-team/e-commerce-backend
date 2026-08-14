@@ -110,7 +110,7 @@ class OrderController extends Controller
               ]
           ], 201);
       } */
-   
+
     public function store(Request $request)
     {
         $buyer = auth()->user();
@@ -132,16 +132,29 @@ class OrderController extends Controller
             'coupon_code' => 'nullable|string|exists:coupons,code'
         ]);
 
+        // 🔥🔥🔥 التحقق من أن جميع المنتجات تخص البائع المحدد
+        $productIds = collect($request->input('items'))->pluck('product_id')->toArray();
+        $products = Product::whereIn('id', $productIds)->get();
+
+        foreach ($products as $product) {
+            if ($product->user_id != $request->seller_id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Product '{$product->name}' (ID: {$product->id}) does not belong to the selected seller.",
+                ], 400);
+            }
+        }
+
         $calculatedSubtotal = 0;
         $calculatedTotalPrice = 0;
         $validatedItems = [];
         $vatRate = 0.15;
-        $productIds = [];
+        $productIdsArray = [];
 
         foreach ($request->input('items') as $item) {
             $product = Product::find($item['product_id']);
             if ($product) {
-                $productIds[] = $product->id;
+                $productIdsArray[] = $product->id;
                 $basePrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
                     ? $product->offer_price
                     : $product->original_price;
@@ -164,8 +177,8 @@ class OrderController extends Controller
         $totalVatAmount = $calculatedTotalPrice - $calculatedSubtotal;
 
         // 🔥🔥🔥 تخزين السعر في Cache بدل Session
-        Cache::put('order_total_' . $buyer->id, $calculatedTotalPrice, 3600); // ساعة كاملة
-        Cache::put('order_product_ids_' . $buyer->id, $productIds, 3600);
+        Cache::put('order_total_' . $buyer->id, $calculatedTotalPrice, 3600);
+        Cache::put('order_product_ids_' . $buyer->id, $productIdsArray, 3600);
         Cache::put('order_items_' . $buyer->id, $request->input('items'), 3600);
 
         // 🔥 معالجة الكوبون مع تشخيص
@@ -180,7 +193,7 @@ class OrderController extends Controller
                 $validation = $coupon->isValid(
                     $buyer->id,
                     $calculatedTotalPrice,
-                    $productIds
+                    $productIdsArray
                 );
 
                 if (!$validation['valid']) {
@@ -202,7 +215,7 @@ class OrderController extends Controller
                                 'product_ids' => $coupon->product_ids,
                             ],
                             'order_total' => $calculatedTotalPrice,
-                            'product_ids_in_cart' => $productIds,
+                            'product_ids_in_cart' => $productIdsArray,
                             'validation_message' => $validation['message']
                         ]
                     ], 400);
