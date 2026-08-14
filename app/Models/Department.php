@@ -51,5 +51,10 @@ class Department extends Model
     {
         return $this->hasMany(Product::class);
     }
+   
+    public function store()
+    {
+        return $this->belongsTo(User::class, 'seller_id');
+    }
 
 }

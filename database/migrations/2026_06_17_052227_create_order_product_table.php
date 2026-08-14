@@ -15,7 +15,6 @@ return new class extends Migration {
 
             // ربط معرف الطلب (مع الحذف التلقائي إذا حُذف الطلب الأصلي)
             $table->foreignId('order_id')->constrained()->onDelete('cascade');
-
             // ربط معرف المنتج (مع الحذف التلقائي إذا حُذف المنتج الأصلي)
             $table->foreignId('product_id')->constrained()->onDelete('cascade');
 

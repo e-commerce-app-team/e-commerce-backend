@@ -41,6 +41,7 @@ return new class extends Migration {
 
             // الحالة وإعدادات الشحن
             $table->enum('status', ['active', 'draft', 'hidden'])->default('draft');
+            $table->unsignedInteger('views')->default(0);
             $table->boolean('is_free_shipping')->default(false); // الشحن المجاني
 
             $table->timestamps();

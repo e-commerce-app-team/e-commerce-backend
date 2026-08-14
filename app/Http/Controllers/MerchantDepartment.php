@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Department;
+use App\Models\Product;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str; // تم إضافتها لاستخدام Str::slug
 use Illuminate\Support\Facades\Storage; // تم إضافتها لحذف الملفات القديمة
@@ -178,4 +179,23 @@ class MerchantDepartment extends Controller
             'message' => 'Department deleted successfully.'
         ], 200);
     }
+//تابع جلب الاقسام الرئيسية للمنصة كاملة 
+    public function getTree()
+    {
+        // جلب الأقسام التي ليس لها أب (أي الرئيسية فقط) مع أبنائها الفرعيين
+        $categories = Department::whereNull('parent_id')
+            ->with(['children' => function($query) {
+                // جلب الحقول الأساسية للأقسام الفرعية
+                $query->select('id', 'name', 'slug', 'parent_id', 'seller_id');
+            }]) 
+            ->select('id', 'name', 'slug', 'seller_id') // جلب الحقول للأقسام الرئيسية
+            ->get();
+
+        // إرجاع النتيجة للمشتري
+        return response()->json([
+            'success' => true,
+            'data' => $categories
+        ], 200);
+    }
+    
 }

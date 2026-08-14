@@ -16,8 +16,8 @@ return new class extends Migration {
 
             // معلومات وعلاقات المشتري والبائع (Foreign Keys)
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade');   // المشتري (Buyer)
-            $table->foreignId('seller_id')->constrained('users')->onDelete('cascade'); // البائع (Seller)
-
+            // $table->foreignId('seller_id')->constrained('users')->onDelete('cascade'); // البائع (Seller)
+            $table->unsignedBigInteger('seller_id')->nullable()->change();
             // إجمالي السعر الخاص بالفاتورة
             $table->decimal('total_price', 15, 2);
 

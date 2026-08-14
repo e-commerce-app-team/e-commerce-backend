@@ -1,4 +1,6 @@
 <?php
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
@@ -7,13 +9,16 @@ use App\Http\Controllers\ChatController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
+ use App\Http\Controllers\Buyer\CartController;
 use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
 use App\Http\Controllers\ProductController;
+use App\Http\Controllers\Buyer\FavoriteController;
+use App\Http\Controllers\Buyer\StoreController;
+use App\Http\Controllers\Buyer\SearchController;
 use App\Http\Controllers\UserController;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Route;
+
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -97,28 +102,28 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('orders/ready-shipping', [OrderController::class, 'readyForShipping']);
 
     Route::get('my-orders', [OrderController::class, 'myOrders']);
-    
+
     // Chat & Messaging Routes
     Route::prefix('chat')->group(function () {
         Route::get('firebase-token', [ChatController::class, 'generateFirebaseToken']);
-        
+
         // Quick Replies
         Route::get('quick-replies', [ChatController::class, 'getQuickReplies']);
         Route::post('quick-replies', [ChatController::class, 'storeQuickReply']);
         Route::put('quick-replies/{id}', [ChatController::class, 'updateQuickReply']);
         Route::delete('quick-replies/{id}', [ChatController::class, 'deleteQuickReply']);
-        
+
         // Auto Replies
         Route::get('auto-replies', [ChatController::class, 'getAutoReplies']);
         Route::post('auto-replies', [ChatController::class, 'storeAutoReply']);
         Route::put('auto-replies/{id}', [ChatController::class, 'updateAutoReply']);
         Route::delete('auto-replies/{id}', [ChatController::class, 'deleteAutoReply']);
-        
+
         // Block / Report
         Route::get('blocked-users', [ChatController::class, 'getBlockedUsers']);
         Route::post('block-user', [ChatController::class, 'blockUser']);
         Route::delete('unblock-user/{id}', [ChatController::class, 'unblockUser']);
-        
+
         Route::post('report-user', [ChatController::class, 'reportUser']);
     });
 });
@@ -143,7 +148,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::patch('merchant/departments/reorder', [MerchantDepartment::class, 'reorderDepartment']);
     Route::post('merchant/departments/{id}/update', [MerchantDepartment::class, 'updateDepartment']);
     Route::delete('merchant/departments/{id}', [MerchantDepartment::class, 'destroyDepartment']);
-
 });
 Route::middleware('auth:sanctum')->group(function () {
 
@@ -192,14 +196,14 @@ Route::middleware('auth:sanctum')->group(function () {
     // 📌 Routes العامة (لا تحتاج تسجيل دخول) تم نقلها لخارج الميدلوير
 
     // 📌 Routes للمستخدمين المسجلين (تتبع المشاهدات والنقرات)
-// ============================================================
+    // ============================================================
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('ads/{adId}/view', [AdController::class, 'trackView']);
         Route::get('ads/{adId}/click', [AdController::class, 'trackClick']);
     });
 
     // 📌 Routes للتاجر (Vendor / Wholesale)
-// ============================================================
+    // ============================================================
     Route::middleware('auth:sanctum')->group(function () {
 
         // 📌 أنواع الإعلانات والأسعار
@@ -220,7 +224,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
     // 📌 Routes للأدمن (Admin)
-// ============================================================
+    // ============================================================
 
     // إدارة الإعلانات
     Route::get('ads/index', [AdminController::class, 'index'])->middleware(['auth:sanctum', 'super_admin']);
@@ -234,6 +238,46 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'isSuperAdmin']);
 });
 
+Route::prefix('buyer')->group(function () {
+    //رابط خريطة المتجر 
+    Route::get('/stores/map', [StoreController::class, 'getStoresMap']);
+    // مسار البحث الرئيسي (يرجع منتجات ومتاجر)
+    Route::get('/search', [SearchController::class, 'search']);
 
+    // مسار الاقتراحات الفورية أثناء الكتابة (Auto-complete)
+    Route::get('/search/suggestions', [SearchController::class, 'suggestions']);
+    // 1.لمتجر واحد ..  رابط جلب شجرة الأقسام (رئيسي -> فرعي)
+    Route::get('/departments/{store_id}/', [StoreController::class, 'getStoreTree']);
+    // رابط جلب صفحة المتجر 
+    Route::get('/stores/{id}', [StoreController::class, 'show']);
+    // منتجات متجر معين
+    Route::get('/stores/{store_id}/products', [StoreController::class, 'getStoreProducts']);
+    // منتجات قسم معين
+    Route::get('/department/{department_id}/products', [StoreController::class, 'getdepartmentProducts']);
+// رابط جلب تقييمات متجر معين
+Route::get('/stores/{id}/reviews', [StoreController::class, 'getStoreReviews']);
+// السلة
+    Route::post('/cart/add', [CartController::class, 'addToCart'])->middleware('auth:sanctum');
+    Route::get('/cart', [CartController::class, 'getCart'])->middleware('auth:sanctum');
+    Route::put('/cart/update/{id}', [CartController::class, 'updateQty'])->middleware('auth:sanctum');
+    Route::delete('/cart/remove/{id}', [CartController::class, 'removeItem'])->middleware('auth:sanctum');
+    Route::delete('/cart/clear', [CartController::class, 'clearCart'])->middleware('auth:sanctum');
+    
+    // إتمام الطلب
+    Route::post('/checkout', [CartController::class, 'checkout'])->middleware('auth:sanctum');
+    });
 
+//رابط ارجاع الاقسام الرئيسية للمنصة كاملة 
+Route::get('/department', [MerchantDepartment::class, 'getTree']);
 
+// 2. رابط جلب المنتجات مع الفلاتر الـ 5 الديناميكية
+Route::get('/products', [ProductController::class, 'FilttetByForBuyer']);
+Route::get('/products/{id}', [ProductController::class, 'showProductDetails']);
+Route::post('/products/{id}/view', [ProductController::class, 'incrementViews']);
+
+Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
+    Route::get('/favorites', [FavoriteController::class, 'index']);
+    Route::post('/favorites/add', [FavoriteController::class, 'add']);
+    Route::delete('/favorites/remove/{product_id}', [FavoriteController::class, 'remove']);
+    Route::post('/favorites/move-to-cart', [FavoriteController::class, 'moveToCart']);
+});

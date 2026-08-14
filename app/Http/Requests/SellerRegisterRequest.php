@@ -24,7 +24,7 @@ class SellerRegisterRequest extends FormRequest
             // 2. حقول خاصة بكل أنواع البائعين (Vendor + Wholesale)
             'role' => 'required|in:vendor,wholesale',
             'store_name' => 'required|string|max:255',
-            'category' => 'required|integer|exists:categories,id',
+            'category' => 'required|string',
             'id_card_photo' => 'required|image|max:2048',
             'store_logo' => 'nullable|image|max:2048',
 
