@@ -23,6 +23,7 @@ use App\Http\Controllers\StaffController;
 use App\Http\Controllers\Buyer\FavoriteController;
 use App\Http\Controllers\Buyer\StoreController;
 use App\Http\Controllers\Buyer\SearchController;
+use App\Http\Controllers\Buyer\ReviewController;
 use App\Http\Controllers\UserController;
 
 
@@ -358,4 +359,10 @@ Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
     Route::get('/following-stores', [StoreFollowController::class, 'followingStores']);
     // جلب قائمة الإشعارات للمستخدم الحاصل على التوكن
     Route::get('/notifications', [NotificationController::class, 'index']);
+//اضافة تقييم لمنتج معين 
+    Route::post('/reviews', [ReviewController::class, 'store']);
+    // عرض كل التقييمات السابقة 
+    Route::get('/reviews', [ReviewController::class, 'index']);
+    //تعديل تقييم معين  خلال مده اقصاها 24 ساعه 
+    Route::put('/reviews/{id}', [ReviewController::class, 'update']);
 });

@@ -276,4 +276,10 @@ public function notifications()
 {
     return $this->morphMany(DatabaseNotification::class, 'notifiable');
 }
+
+public function reviews()
+{
+    return $this->hasMany(Review::class);
+}
+
 }
