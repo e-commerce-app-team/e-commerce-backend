@@ -365,4 +365,7 @@ Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
     Route::get('/reviews', [ReviewController::class, 'index']);
     //تعديل تقييم معين  خلال مده اقصاها 24 ساعه 
     Route::put('/reviews/{id}', [ReviewController::class, 'update']);
+    //تغيير حالة اشعار معين (ايقاف/تفعيل)
+    Route::put('/notification-settings', [NotificationController::class, 'updatePreferences']);
 });
+

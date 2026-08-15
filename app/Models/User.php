@@ -282,4 +282,9 @@ public function reviews()
     return $this->hasMany(Review::class);
 }
 
+public function notificationPreferences()
+{
+    return $this->hasMany(NotificationPreference::class);
+}
+
 }

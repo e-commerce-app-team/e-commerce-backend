@@ -1,7 +1,7 @@
 <?php
 
 namespace App\Http\Controllers\Buyer;
-
+use App\Models\NotificationPreference;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 
@@ -35,4 +35,43 @@ class NotificationController extends Controller
             'data'   => $notifications
         ], 200);
     }
+
+   public function updatePreferences(Request $request)
+{
+
+    if ($request->user()->role !== 'buyer') { 
+        return response()->json([
+            'status'  => false,
+            'message' => 'Unauthorized. Only buyers can access this endpoint.'
+        ], 403);
+    }
+
+    $request->validate([
+        'settings'          => 'required|array',
+        'settings.*.type'   => 'required|string',
+        'settings.*.enabled' => 'required|boolean',
+    ]);
+
+    $user = $request->user();
+
+    // 3. حفظ التفضيلات
+    foreach ($request->settings as $setting) {
+        NotificationPreference::updateOrCreate(
+            [
+                'user_id' => $user->id,
+                'type'    => $setting['type'],
+            ],
+            [
+                'enabled' => $setting['enabled'],
+            ]
+        );
+    }
+
+    return response()->json([
+        'status'  => true,
+        'message' => 'Notification preferences updated successfully.',
+        'data'    => $user->notificationPreferences()->get(['type', 'enabled']),
+    ], 200);
+}
+
 }
