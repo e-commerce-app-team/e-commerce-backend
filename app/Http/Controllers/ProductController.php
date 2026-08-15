@@ -8,6 +8,8 @@ use App\Models\ProductVariant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use App\Notifications\NewProductNotification;
+use Illuminate\Support\Facades\Notification;
 
 class ProductController extends Controller
 {
@@ -65,13 +67,21 @@ class ProductController extends Controller
                 ProductVariant::create($variantFields);
             }
         }
+ // 5.5 إرسال الإشعار لجميع متابعي البائع/المتجر الحالي
+        $followers = $user->storeFollowers;
 
+        if ($followers && $followers->count() > 0) {
+            Notification::send($followers, new NewProductNotification($product));
+        }
         // 6. إرجاع النتيجة النهائية مع تحميل المتغيرات
         return response()->json([
             'success' => true,
             'message' => 'Product and its variants created successfully.',
             'data' => $product->load('variants')
         ], 201);
+        
+
+
     }
 
     public function update(ProductSaveRequest $request, $id): JsonResponse

@@ -1,16 +1,21 @@
 <?php
+
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\ProductController;
 use App\Http\Controllers\AdminSettingsController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\Buyer\BuyerProfileController;
+use App\Http\Controllers\Buyer\StoreFollowController;
+use App\Http\Controllers\Buyer\NotificationController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
- use App\Http\Controllers\Buyer\CartController;
+use App\Http\Controllers\Buyer\CartController;
 use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
@@ -316,19 +321,19 @@ Route::prefix('buyer')->group(function () {
     Route::get('/stores/{store_id}/products', [StoreController::class, 'getStoreProducts']);
     // منتجات قسم معين
     Route::get('/department/{department_id}/products', [StoreController::class, 'getdepartmentProducts']);
-// رابط جلب تقييمات متجر معين
-Route::get('/stores/{id}/reviews', [StoreController::class, 'getStoreReviews']);
-// السلة
+    // رابط جلب تقييمات متجر معين
+    Route::get('/stores/{id}/reviews', [StoreController::class, 'getStoreReviews']);
+    // السلة
     Route::post('/cart/add', [CartController::class, 'addToCart'])->middleware('auth:sanctum');
     Route::get('/cart', [CartController::class, 'getCart'])->middleware('auth:sanctum');
     Route::put('/cart/update/{id}', [CartController::class, 'updateQty'])->middleware('auth:sanctum');
     Route::delete('/cart/remove/{id}', [CartController::class, 'removeItem'])->middleware('auth:sanctum');
     Route::delete('/cart/clear', [CartController::class, 'clearCart'])->middleware('auth:sanctum');
-    
+
     // إتمام الطلب
     Route::post('/checkout', [CartController::class, 'checkout'])->middleware('auth:sanctum');
     Route::get('/orders', [OrderController::class, 'index'])->middleware('auth:sanctum');
-    });
+});
 
 //رابط ارجاع الاقسام الرئيسية للمنصة كاملة 
 Route::get('/department', [MerchantDepartment::class, 'getTree']);
@@ -343,4 +348,14 @@ Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
     Route::post('/favorites/add', [FavoriteController::class, 'add']);
     Route::delete('/favorites/remove/{product_id}', [FavoriteController::class, 'remove']);
     Route::post('/favorites/move-to-cart', [FavoriteController::class, 'moveToCart']);
+    Route::get('/profile', [BuyerProfileController::class, 'show'])->middleware('auth:sanctum');
+    Route::put('/profile', [BuyerProfileController::class, 'update']);
+    // متابعة وإلغاء متابعة متجر
+    Route::post('/stores/{id}/follow', [StoreFollowController::class, 'follow']);
+    Route::delete('/stores/{id}/unfollow', [StoreFollowController::class, 'unfollow']);
+
+    // جلب قائمة المتاجر المتابَعة للمشتري
+    Route::get('/following-stores', [StoreFollowController::class, 'followingStores']);
+    // جلب قائمة الإشعارات للمستخدم الحاصل على التوكن
+    Route::get('/notifications', [NotificationController::class, 'index']);
 });
