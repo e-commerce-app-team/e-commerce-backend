@@ -167,4 +167,42 @@ class CategoryController extends Controller
             'data' => $categories
         ], 200);
     }
+
+     //جلب الأقسام الرئيسية 
+    public function getMainCategories(): JsonResponse
+    {
+        $categories = Category::whereNull('parent_id')
+            ->where('is_visible', true)
+            ->orderBy('order_position', 'asc')
+            ->get(['id', 'name', 'slug', 'image_url', 'icon_url', 'order_position']);
+
+        return response()->json([
+            'status' => true,
+            'data'   => $categories
+        ], 200);
+    }
+
+    
+     //جلب الأقسام الفرعية لقسم معين 
+    public function getChildrenCategories($id): JsonResponse
+    {
+        $category = Category::find($id);
+
+        if (!$category) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'Category not found'
+            ], 404);
+        }
+
+        $children = $category->children()
+            ->where('is_visible', true)
+            ->get(['id', 'parent_id', 'name', 'slug', 'image_url', 'icon_url', 'order_position']);
+
+        return response()->json([
+            'status' => true,
+            'data'   => $children
+        ], 200);
+    }
 }
+

@@ -382,3 +382,9 @@ Route::prefix('home')->group(function () {
     // تسجيل نقرة على بانر محدد
     Route::post('banners/{id}/click', [BannerController::class, 'recordClick']);
 });
+
+// مسارات الأقسام للشاشة الرئيسية والزوار
+Route::prefix('categories')->group(function () {
+    Route::get('/main', [CategoryController::class, 'getMainCategories']);
+    Route::get('/{id}/children', [CategoryController::class, 'getChildrenCategories']);
+});
