@@ -287,4 +287,10 @@ public function notificationPreferences()
     return $this->hasMany(NotificationPreference::class);
 }
 
+// تقييمات هذا المتجر
+public function storeReviews()
+{
+    return $this->hasMany(StoreReview::class, 'store_id');
+}
+
 }

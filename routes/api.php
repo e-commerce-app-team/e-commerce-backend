@@ -15,6 +15,8 @@ use App\Http\Controllers\Buyer\StoreFollowController;
 use App\Http\Controllers\Buyer\NotificationController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\StoreReviewController;
+use App\Http\Controllers\StoreController;
 use App\Http\Controllers\Buyer\CartController;
 use App\Http\Controllers\Buyer\BannerController;
 use App\Http\Controllers\OtpController;
@@ -22,7 +24,6 @@ use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
 use App\Http\Controllers\StaffController;
 use App\Http\Controllers\Buyer\FavoriteController;
-use App\Http\Controllers\Buyer\StoreController;
 use App\Http\Controllers\Buyer\SearchController;
 use App\Http\Controllers\Buyer\ReviewController;
 use App\Http\Controllers\UserController;
@@ -381,10 +382,17 @@ Route::prefix('home')->group(function () {
     Route::get('banners', [BannerController::class, 'index']);
     // تسجيل نقرة على بانر محدد
     Route::post('banners/{id}/click', [BannerController::class, 'recordClick']);
+    //جلب المتاجر المميزة المفعلة 
+    Route::get('/featured-stores', [StoreController::class, 'getFeaturedStores']);
 });
 
 // مسارات الأقسام للشاشة الرئيسية والزوار
 Route::prefix('categories')->group(function () {
     Route::get('/main', [CategoryController::class, 'getMainCategories']);
     Route::get('/{id}/children', [CategoryController::class, 'getChildrenCategories']);
+});
+
+// 2. إضافة تقييم لمتجر (يتطلب تسجيل دخول المشتري auth:sanctum)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/stores/{storeId}/review', [StoreReviewController::class, 'store']);
 });
