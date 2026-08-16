@@ -367,5 +367,10 @@ Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
     Route::put('/reviews/{id}', [ReviewController::class, 'update']);
     //تغيير حالة اشعار معين (ايقاف/تفعيل)
     Route::put('/notification-settings', [NotificationController::class, 'updatePreferences']);
+    //محادثاتي (للمشتري) مع التجار 
+    Route::get('/conversations', [ChatController::class, 'getBuyerConversations']);
 });
-
+//الانعكاس عند التاجر عكس الي قبلها
+Route::middleware('auth:sanctum')->prefix('seller')->group(function () {
+    Route::get('conversations', [ChatController::class, 'getSellerConversations']);
+});
