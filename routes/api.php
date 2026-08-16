@@ -16,6 +16,7 @@ use App\Http\Controllers\Buyer\NotificationController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\Buyer\CartController;
+use App\Http\Controllers\Buyer\BannerController;
 use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
@@ -373,4 +374,11 @@ Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
 //الانعكاس عند التاجر عكس الي قبلها
 Route::middleware('auth:sanctum')->prefix('seller')->group(function () {
     Route::get('conversations', [ChatController::class, 'getSellerConversations']);
+});
+
+Route::prefix('home')->group(function () {
+    // جلب البانرات النشطة (يعمل مع المستخدم المسجل أو الزائر)
+    Route::get('banners', [BannerController::class, 'index']);
+    // تسجيل نقرة على بانر محدد
+    Route::post('banners/{id}/click', [BannerController::class, 'recordClick']);
 });
