@@ -398,3 +398,5 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 // مسار المتاجر والمنتجات الرائجة (عمومي للزوار والمستخدمين)
 Route::get('/home/trending', [ProductController::class, 'getTrendingProducts']);
+//مسار عروض اليوم (Flash Sales)
+Route::get('/home/flash-sales', [ProductController::class, 'getFlashSales']);

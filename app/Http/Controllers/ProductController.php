@@ -656,4 +656,61 @@ class ProductController extends Controller
             })
         ], 200);
     }
+//تابع عروض اليوم الذي سيظهر في  الهوم بيج
+    public function getFlashSales(Request $request)
+{
+    $limit = $request->input('limit', 10);
+    $locale = app()->getLocale();
+    $now = Carbon::now();
+
+    // جلب المنتجات التي يملك تاجرها عرضاً ينتهي اليوم
+    $products = Product::where('status', 'active')
+        ->whereNotNull('offer_price')
+        ->where('offer_price', '>', 0)
+        ->whereNotNull('offer_expires_at')
+        ->whereBetween('offer_expires_at', [$now, Carbon::now()->endOfDay()])
+        ->orderBy('offer_expires_at', 'asc')
+        ->limit($limit)
+        ->get();
+
+    return response()->json([
+        'success' => true,
+        'data' => $products->map(function ($product) use ($locale, $now) {
+            // استخراج اسم المنتج المترجم
+            $name = $product->name;
+            if (is_array($name)) {
+                $name = $name[$locale] ?? $name['ar'] ?? reset($name);
+            } elseif (is_string($name) && str_starts_with($name, '{')) {
+                $decoded = json_decode($name, true);
+                if (is_array($decoded)) {
+                    $name = $decoded[$locale] ?? $decoded['ar'] ?? reset($decoded);
+                }
+            }
+
+            // معالجة صور المنتج
+            $images = is_array($product->images)
+                ? array_map(fn($img) => str_starts_with($img, 'http') ? $img : asset('storage/' . $img), $product->images)
+                : [];
+
+            // حساب الوقت المتبقي بالثواني للمؤقت العكسي
+            $expiresAt = Carbon::parse($product->offer_expires_at);
+            $remainingSeconds = max(0, $now->diffInSeconds($expiresAt, false));
+
+            return [
+                'id'                => $product->id,
+                'name'              => $name,
+                'original_price'    => $product->original_price,
+                'offer_price'       => $product->offer_price,
+                'wholesale_price'   => $product->wholesale_price,
+                'discount_percent'  => $product->original_price > 0 
+                                       ? round((($product->original_price - $product->offer_price) / $product->original_price) * 100) 
+                                       : 0,
+                'images'            => $images,
+                'offer_expires_at'  => $product->offer_expires_at,
+                'remaining_seconds' => $remainingSeconds,
+            ];
+        })
+    ], 200);
+}
+
 }
