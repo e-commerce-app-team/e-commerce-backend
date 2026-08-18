@@ -8,6 +8,10 @@ use App\Models\ProductVariant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use App\Notifications\NewProductNotification;
+use Illuminate\Support\Facades\Notification;
+use App\Models\UserBehavior;
+use Carbon\Carbon;
 
 class ProductController extends Controller
 {
@@ -65,7 +69,12 @@ class ProductController extends Controller
                 ProductVariant::create($variantFields);
             }
         }
+        // 5.5 إرسال الإشعار لجميع متابعي البائع/المتجر الحالي
+        $followers = $user->storeFollowers;
 
+        if ($followers && $followers->count() > 0) {
+            Notification::send($followers, new NewProductNotification($product));
+        }
         // 6. إرجاع النتيجة النهائية مع تحميل المتغيرات
         return response()->json([
             'success' => true,
@@ -451,7 +460,7 @@ class ProductController extends Controller
             'data' => $products
         ], 200);
     }
-    
+
     //فلاتر: الأقسام، السعر، التقييم، الشحن المجاني، العروض فقط
     public function FilttetByForBuyer(Request $request)
     {
@@ -507,27 +516,67 @@ class ProductController extends Controller
     // تابع جلب بيانات منتج معين حسب ال id  اي بشكل عام بيانات المنتج التفصيلية ولاي متجر تابع 
     public function showProductDetails($id)
     {
-        $product = Product::with([
+        // 1. جلب المنتج مع حساب متوسط التقييم وعدد المراجعات
+        $product = \App\Models\Product::with([
             'variants',
-            'seller:id,store_name,store_logo,store_description'
-        ])->find($id);
+            'seller:id,store_name,store_logo,store_description',
+            'reviews.user:id,first_name,last_name,profile_photo'
+        ])
+            ->withAvg('reviews as rating', 'rating')
+            ->withCount('reviews as reviews_count')
+            ->find($id);
 
         if (!$product) {
             return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
         }
 
-        // جلب منتجات مشابهة (مثلاً في نفس القسم أو نفس المتجر)
-        $similarProducts = Product::where('department_id', $product->department_id)
+        // 🎯 تسجيل سلوك المشاهدة (View) للمستخدم الحالي إذا كان مسجلاً لديه حساب
+        try {
+            if (auth('sanctum')->check()) {
+                \App\Models\UserBehavior::create([
+                    'user_id'     => auth('sanctum')->id(),
+                    'action'      => 'view',
+                    'product_id'  => $product->id,
+                    'category_id' => $product->category_id,
+                ]);
+            }
+        } catch (\Exception $e) {
+            // تجاهل أي خطأ لمنع إعاقة تجربة المستخدم إذا حدث أي شيء في السجل
+        }
+
+        // 2. المنتجات المشابهة
+        $similarProducts = \App\Models\Product::where('department_id', $product->department_id)
             ->where('id', '!=', $id)
             ->limit(4)
             ->get();
 
+        // 3. بناء الاستجابة بالتقييمات الحقيقية
         return response()->json([
             'success' => true,
             'data' => [
-                'product' => $product,
+                'product' => array_merge($product->toArray(), [
+                    'rating'        => round($product->rating ?? 0, 2),
+                    'reviews_count' => $product->reviews_count,
+                ]),
                 'similar_products' => $similarProducts,
-                'reviews_placeholder' => "نظام التقييمات قيد التطوير"
+                'reviews' => $product->reviews->map(function ($review) {
+                    $fullName = trim(($review->user->first_name ?? '') . ' ' . ($review->user->last_name ?? ''));
+                    return [
+                        'id'         => $review->id,
+                        'rating'     => $review->rating,
+                        'comment'    => $review->comment,
+                        'created_at' => $review->created_at->format('Y-m-d H:i'),
+                        'user'       => [
+                            'id'            => $review->user->id ?? null,
+                            'first_name'    => $review->user->first_name ?? null,
+                            'last_name'     => $review->user->last_name ?? null,
+                            'name'          => !empty($fullName) ? $fullName : 'مشتري',
+                            'profile_photo' => isset($review->user->profile_photo)
+                                ? asset('storage/' . $review->user->profile_photo)
+                                : null,
+                        ]
+                    ];
+                })
             ]
         ], 200);
     }
@@ -540,7 +589,7 @@ class ProductController extends Controller
         $product = Product::find($id);
 
         if (!$product) {
-            return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
+            return response()->json(['success' => false, 'message' => 'Product not found'], 404);
         }
 
         // زيادة قيمة المشاهدات بمقدار 1
@@ -548,8 +597,212 @@ class ProductController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'تم تسجيل المشاهدة بنجاح',
+            'message' => 'View recorded successfully',
             'views_count' => $product->views
+        ], 200);
+    }
+    //تابع جلب المنتجات الرائجه بالهوم بيج 
+    public function getTrendingProducts(Request $request)
+    {
+        $limit = $request->input('limit', 10);
+        $locale = app()->getLocale();
+
+        // 1. محاولة جلب المنتجات الأكثر طلباً في آخر 7 أيام
+        $products = Product::where('status', 'active')
+            ->has('orderItems')
+            ->withCount(['orderItems as orders_count' => function ($query) {
+                $query->where('created_at', '>=', Carbon::now()->subDays(7));
+            }])
+            ->having('orders_count', '>', 0)
+            ->orderByDesc('orders_count')
+            ->limit($limit)
+            ->get();
+
+        // 2. Fallback: إذا كانت القائمة فارغة، نجلب الأكثر طلباً بشكل عام (All-time)
+        if ($products->isEmpty()) {
+            $products = Product::where('status', 'active')
+                ->has('orderItems')
+                ->withCount('orderItems as orders_count')
+                ->having('orders_count', '>', 0)
+                ->orderByDesc('orders_count')
+                ->limit($limit)
+                ->get();
+        }
+
+        // 3. Fallback إضافي: إذا لم تكن هناك أي طلبات في النظام مطلقاً، نجلب أحدث المنتجات
+        if ($products->isEmpty()) {
+            $products = Product::where('status', 'active')
+                ->latest()
+                ->limit($limit)
+                ->get()
+                ->map(function ($product) {
+                    $product->orders_count = 0;
+                    return $product;
+                });
+        }
+
+        // إرجاع الاستجابة بنفس التنسيق
+        return response()->json([
+            'success' => true,
+            'data' => $products->map(function ($product) use ($locale) {
+                $name = $product->name;
+
+                if (is_array($name)) {
+                    $name = $name[$locale] ?? $name['ar'] ?? reset($name);
+                } elseif (is_string($name) && str_starts_with($name, '{')) {
+                    $decoded = json_decode($name, true);
+                    if (is_array($decoded)) {
+                        $name = $decoded[$locale] ?? $decoded['ar'] ?? reset($decoded);
+                    }
+                }
+
+                $images = is_array($product->images)
+                    ? array_map(fn($img) => str_starts_with($img, 'http') ? $img : asset('storage/' . $img), $product->images)
+                    : [];
+
+                return [
+                    'id'             => $product->id,
+                    'name'           => $name,
+                    'original_price' => $product->original_price,
+                    'offer_price'    => $product->offer_price,
+                    'images'         => $images,
+                    'orders_count'   => $product->orders_count,
+                ];
+            })
+        ], 200);
+    }
+    //تابع عروض اليوم الذي سيظهر في  الهوم بيج
+    public function getFlashSales(Request $request)
+    {
+        $limit = $request->input('limit', 10);
+        $locale = app()->getLocale();
+        $now = Carbon::now();
+
+        // جلب المنتجات التي يملك تاجرها عرضاً ينتهي اليوم
+        $products = Product::where('status', 'active')
+            ->whereNotNull('offer_price')
+            ->where('offer_price', '>', 0)
+            ->whereNotNull('offer_expires_at')
+            ->whereBetween('offer_expires_at', [$now, Carbon::now()->endOfDay()])
+            ->orderBy('offer_expires_at', 'asc')
+            ->limit($limit)
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $products->map(function ($product) use ($locale, $now) {
+                // استخراج اسم المنتج المترجم
+                $name = $product->name;
+                if (is_array($name)) {
+                    $name = $name[$locale] ?? $name['ar'] ?? reset($name);
+                } elseif (is_string($name) && str_starts_with($name, '{')) {
+                    $decoded = json_decode($name, true);
+                    if (is_array($decoded)) {
+                        $name = $decoded[$locale] ?? $decoded['ar'] ?? reset($decoded);
+                    }
+                }
+
+                // معالجة صور المنتج
+                $images = is_array($product->images)
+                    ? array_map(fn($img) => str_starts_with($img, 'http') ? $img : asset('storage/' . $img), $product->images)
+                    : [];
+
+                // حساب الوقت المتبقي بالثواني للمؤقت العكسي
+                $expiresAt = Carbon::parse($product->offer_expires_at);
+                $remainingSeconds = max(0, $now->diffInSeconds($expiresAt, false));
+
+                return [
+                    'id'                => $product->id,
+                    'name'              => $name,
+                    'original_price'    => $product->original_price,
+                    'offer_price'       => $product->offer_price,
+                    'wholesale_price'   => $product->wholesale_price,
+                    'discount_percent'  => $product->original_price > 0
+                        ? round((($product->original_price - $product->offer_price) / $product->original_price) * 100)
+                        : 0,
+                    'images'            => $images,
+                    'offer_expires_at'  => $product->offer_expires_at,
+                    'remaining_seconds' => $remainingSeconds,
+                ];
+            })
+        ], 200);
+    }
+    //تابع مقترحة لي او منتجات قد تعجيك 
+    public function getRecommendedProducts(Request $request)
+    {
+        $userId = auth('sanctum')->id() ?? $request->input('user_id');
+        $limit  = $request->input('limit', 10);
+        $departmentId = null;
+        $lastProductId = null;
+
+        if ($userId) {
+            // 1. البحث عن آخر عملية شراء
+            $lastAction = UserBehavior::where('user_id', $userId)
+                ->where('action', 'buy')
+                ->latest()
+                ->first();
+
+            // 2. إذا لم توجد مشتريات، نأخذ آخر سلة أو مشاهدة
+            if (!$lastAction) {
+                $lastAction = UserBehavior::where('user_id', $userId)
+                    ->whereIn('action', ['cart', 'view'])
+                    ->latest()
+                    ->first();
+            }
+
+            if ($lastAction) {
+                $departmentId  = $lastAction->category_id; // مسجّل فيه department_id
+                $lastProductId = $lastAction->product_id;
+            }
+        }
+
+        // 3. استعلام جلب المنتجات
+        $query = Product::query();
+
+        if ($departmentId) {
+            // جلب المنتجات المنتمية لنفس القسم الرئيسي مع استثناء المنتج الأخير
+            $query->where('department_id', $departmentId);
+            if ($lastProductId) {
+                $query->where('id', '!=', $lastProductId);
+            }
+        } else {
+            // Fallback: إظهار أحدث المنتجات للزائرين أو الحسابات الجديدة
+            $query->latest();
+        }
+
+        $products = $query->limit($limit)->get();
+
+        // 4. تنسيق الاستجابة لـ Postman/Front-end
+        return response()->json([
+            'success' => true,
+            'data'    => $products->map(function ($product) {
+                // معالجة اسم المنتج المترجم (إذا كان مخزناً كـ JSON)
+                $name = $product->name;
+                if (is_string($name) && str_starts_with($name, '{')) {
+                    $decodedName = json_decode($name, true);
+                    $name = $decodedName['ar'] ?? $decodedName['en'] ?? $name;
+                }
+
+                // معالجة الصور لاستخراج رابط أول صورة
+                $images = is_array($product->images)
+                    ? $product->images
+                    : (is_string($product->images) ? json_decode($product->images, true) : []);
+
+                $firstImage = !empty($images) ? $images[0] : null;
+                $imageUrl = $firstImage
+                    ? (str_starts_with($firstImage, 'http') ? $firstImage : asset('storage/' . $firstImage))
+                    : null;
+
+                return [
+                    'id'              => $product->id,
+                    'name'            => $name,
+                    'original_price'  => $product->original_price ?? $product->price,
+                    'offer_price'     => $product->offer_price ?? null,
+                    'image'           => $imageUrl,
+                    'department_id'   => $product->department_id,
+                    'category_id'     => $product->category_id,
+                ];
+            })
         ], 200);
     }
 }

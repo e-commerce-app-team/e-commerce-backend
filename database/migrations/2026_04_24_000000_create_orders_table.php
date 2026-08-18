@@ -10,6 +10,9 @@ return new class extends Migration {
      */
     public function up(): void
     {
+        if (Schema::hasTable('orders')) {
+        return; // إلغاء التنفيذ فوراً لتجاوز الخطأ
+    }
         Schema::create('orders', function (Blueprint $table) {
             // 1. رقم الطلب (تلقائي الحفظ والزيادة المستمرة)
             $table->id();

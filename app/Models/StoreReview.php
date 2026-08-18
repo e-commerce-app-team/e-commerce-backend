@@ -10,22 +10,20 @@ class StoreReview extends Model
     use HasFactory;
 
     protected $fillable = [
-        'store_id',
         'user_id',
+        'store_id',
         'rating',
         'comment',
     ];
 
-    protected $casts = [
-        'rating' => 'decimal:1',
-    ];
-
+    // علاقة التقييم بالمتجر
     public function store()
     {
         return $this->belongsTo(User::class, 'store_id');
     }
 
-    public function buyer()
+    // علاقة التقييم بالمشتري
+    public function user()
     {
         return $this->belongsTo(User::class, 'user_id');
     }

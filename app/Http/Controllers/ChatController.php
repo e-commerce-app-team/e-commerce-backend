@@ -131,7 +131,7 @@ class ChatController extends Controller
     // 4. Block User
     public function getBlockedUsers()
     {
-        $blocked = BlockedUser::with('blocked:id,first_name,last_name,email,profile_photo')
+        $blocked = BlockedUser::with('blocked:id,first_name,last_name,profile_photo')
             ->where('blocker_id', Auth::id())
             ->get();
 
@@ -188,4 +188,60 @@ class ChatController extends Controller
 
         return response()->json(['message' => 'User reported successfully', 'data' => $report], 201);
     }
+
+    // 6. Buyer Conversations Config & Blocked List (For Firebase Chat)
+    public function getBuyerConversations(Request $request)
+    {
+        $user = Auth::user();
+
+       
+        if ($user->role !== 'buyer') { 
+            return response()->json([
+                'status'  => false,
+                'message' => 'Unauthorized. Only buyers can access this endpoint.'
+            ], 403);
+        }
+
+        // 2. جلب قائمة المتاجر/المستخدمين المحظورين لتصفيتهم في الفايربيس
+        $blockedUserIds = BlockedUser::where('blocker_id', $user->id)
+            ->pluck('blocked_id')
+            ->toArray();
+
+        // 3. إرجاع بيانات التهيئة للفلاتر
+        return response()->json([
+            'status' => true,
+            'data'   => [
+                'user_id'          => $user->id,
+                'firebase_node'    => "chats/{$user->id}",
+                'blocked_user_ids' => $blockedUserIds,
+            ]
+        ], 200);
+    }
+
+    // 7. Seller Conversations Config & Blocked List (For Firebase Chat)
+    public function getSellerConversations(Request $request)
+    {
+        $user = Auth::user();
+
+        if (!in_array($user->role, ['vendor','wholesale'])) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'Unauthorized. Only sellers can access this endpoint.'
+            ], 403);
+        }
+
+        $blockedUserIds = BlockedUser::where('blocker_id', $user->id)
+            ->pluck('blocked_id')
+            ->toArray();
+
+        return response()->json([
+            'status' => true,
+            'data'   => [
+                'user_id'          => $user->id,
+                'firebase_node'    => "chats/{$user->id}",
+                'blocked_user_ids' => $blockedUserIds,
+            ]
+        ], 200);
+    }
+
 }

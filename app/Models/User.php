@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -301,4 +302,38 @@ class User extends Authenticatable
     {
         return $this->hasMany(CartItem::class);
     }
+}
+// المتاجر التي يتابعها المشتري
+public function followingStores()
+{
+    return $table = $this->belongsToMany(User::class, 'store_follows', 'user_id', 'seller_id')
+                ->withPivot('followed_at');
+}
+//المتابعون (خاص بباكند البائع إذا احتجتي معرفة من يتابعه)
+public function storeFollowers()
+{
+    return $this->belongsToMany(User::class, 'store_follows', 'seller_id', 'user_id')
+                ->withPivot('followed_at');
+}
+public function notifications()
+{
+    return $this->morphMany(DatabaseNotification::class, 'notifiable');
+}
+
+public function reviews()
+{
+    return $this->hasMany(Review::class);
+}
+
+public function notificationPreferences()
+{
+    return $this->hasMany(NotificationPreference::class);
+}
+
+// تقييمات هذا المتجر
+public function storeReviews()
+{
+    return $this->hasMany(StoreReview::class, 'store_id');
+}
+
 }

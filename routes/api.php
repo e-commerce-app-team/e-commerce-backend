@@ -1,25 +1,31 @@
 <?php
-use App\Http\Controllers\ProductController;
+
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\ProductController;
 use App\Http\Controllers\AdminSettingsController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\Buyer\BuyerProfileController;
+use App\Http\Controllers\Buyer\StoreFollowController;
+use App\Http\Controllers\Buyer\NotificationController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
-use App\Http\Controllers\Buyer\AddressController;
+use App\Http\Controllers\StoreReviewController;
+use App\Http\Controllers\Buyer\StoreController;
 use App\Http\Controllers\Buyer\CartController;
+use App\Http\Controllers\Buyer\BannerController;
 use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
 use App\Http\Controllers\StaffController;
 use App\Http\Controllers\Buyer\FavoriteController;
-use App\Http\Controllers\Buyer\StoreController;
 use App\Http\Controllers\Buyer\SearchController;
+use App\Http\Controllers\Buyer\ReviewController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\Buyer\BuyerHomeController;
 
@@ -350,23 +356,13 @@ Route::prefix('buyer')->group(function () {
     Route::get('/department/{department_id}/products', [StoreController::class, 'getdepartmentProducts']);
     // رابط جلب تقييمات متجر معين
     Route::get('/stores/{id}/reviews', [StoreController::class, 'getStoreReviews']);
-    Route::post('/stores/{id}/reviews', [StoreController::class, 'addStoreReview'])->middleware('auth:sanctum');
-    Route::post('/stores/{id}/follow', [StoreController::class, 'toggleFollow'])->middleware('auth:sanctum');
     // السلة
     Route::post('/cart/add', [CartController::class, 'addToCart'])->middleware('auth:sanctum');
     Route::get('/cart', [CartController::class, 'getCart'])->middleware('auth:sanctum');
     Route::put('/cart/update/{id}', [CartController::class, 'updateQty'])->middleware('auth:sanctum');
     Route::delete('/cart/remove/{id}', [CartController::class, 'removeItem'])->middleware('auth:sanctum');
     Route::delete('/cart/clear', [CartController::class, 'clearCart'])->middleware('auth:sanctum');
-    Route::get('/cart/shipping/{sellerId}', [CartController::class, 'getShippingOptions'])->middleware('auth:sanctum');
 
-    // عناوين التسليم
-    Route::get('/addresses', [AddressController::class, 'index'])->middleware('auth:sanctum');
-    Route::post('/addresses', [AddressController::class, 'store'])->middleware('auth:sanctum');
-    Route::put('/addresses/{id}', [AddressController::class, 'update'])->middleware('auth:sanctum');
-    Route::delete('/addresses/{id}', [AddressController::class, 'destroy'])->middleware('auth:sanctum');
-    Route::patch('/addresses/{id}/default', [AddressController::class, 'setDefault'])->middleware('auth:sanctum');
-    
     // إتمام الطلب
     Route::post('/checkout', [CartController::class, 'checkout'])->middleware('auth:sanctum');
     Route::get('/orders', [OrderController::class, 'index'])->middleware('auth:sanctum');
@@ -385,26 +381,56 @@ Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
     Route::post('/favorites/add', [FavoriteController::class, 'add']);
     Route::delete('/favorites/remove/{product_id}', [FavoriteController::class, 'remove']);
     Route::post('/favorites/move-to-cart', [FavoriteController::class, 'moveToCart']);
+    Route::get('/profile', [BuyerProfileController::class, 'show'])->middleware('auth:sanctum');
+    Route::put('/profile', [BuyerProfileController::class, 'update']);
+    // متابعة وإلغاء متابعة متجر
+    Route::post('/stores/{id}/follow', [StoreFollowController::class, 'follow']);
+    Route::delete('/stores/{id}/unfollow', [StoreFollowController::class, 'unfollow']);
+
+    // جلب قائمة المتاجر المتابَعة للمشتري
+    Route::get('/following-stores', [StoreFollowController::class, 'followingStores']);
+    // جلب قائمة الإشعارات للمستخدم الحاصل على التوكن
+    Route::get('/notifications', [NotificationController::class, 'index']);
+//اضافة تقييم لمنتج معين 
+    Route::post('/reviews', [ReviewController::class, 'store']);
+    // عرض كل التقييمات السابقة 
+    Route::get('/reviews', [ReviewController::class, 'index']);
+    //تعديل تقييم معين  خلال مده اقصاها 24 ساعه 
+    Route::put('/reviews/{id}', [ReviewController::class, 'update']);
+    //تغيير حالة اشعار معين (ايقاف/تفعيل)
+    Route::put('/notification-settings', [NotificationController::class, 'updatePreferences']);
+    //محادثاتي (للمشتري) مع التجار 
+    Route::get('/conversations', [ChatController::class, 'getBuyerConversations']);
+});
+//الانعكاس عند التاجر عكس الي قبلها
+Route::middleware('auth:sanctum')->prefix('seller')->group(function () {
+    Route::get('conversations', [ChatController::class, 'getSellerConversations']);
 });
 
-// ─── Buyer Home (public endpoints) ────────────────────────────────────────────────
-Route::prefix('buyer')->group(function () {
-    Route::get('banners',               [BuyerHomeController::class, 'getBanners']);
-    Route::get('categories',            [BuyerHomeController::class, 'getCategories']);
-    Route::get('stores/nearby',         [BuyerHomeController::class, 'getNearbyStores']);
-    Route::get('products/featured',     [BuyerHomeController::class, 'getFeaturedProducts']);
-    Route::get('products/flash-sale',   [BuyerHomeController::class, 'getFlashSaleProducts']);
-    Route::get('products/trending',     [BuyerHomeController::class, 'getTrendingProducts']);
-    Route::get('products/new-arrivals', [BuyerHomeController::class, 'getNewArrivals']);
-    Route::get('products/offers',       [BuyerHomeController::class, 'getOffers']);
-    Route::get('products',              [BuyerHomeController::class, 'getAllProducts']);
-
-    // Auth-optional routes (recommended works with or without auth)
-    Route::get('products/recommended',  [BuyerHomeController::class, 'getRecommended']);
-
-    // Auth-required routes
-    Route::middleware('auth:sanctum')->group(function () {
-        Route::get('favorites',                         [BuyerHomeController::class, 'getFavorites']);
-        Route::post('favorites/{productId}/toggle',     [BuyerHomeController::class, 'toggleFavorite']);
-    });
+Route::prefix('home')->group(function () {
+    // جلب البانرات النشطة (يعمل مع المستخدم المسجل أو الزائر)
+    Route::get('banners', [BannerController::class, 'index']);
+    // تسجيل نقرة على بانر محدد
+    Route::post('banners/{id}/click', [BannerController::class, 'recordClick']);
+    //جلب المتاجر المميزة المفعلة 
+    Route::get('/featured-stores', [StoreController::class, 'getFeaturedStores']);
 });
+
+// مسارات الأقسام للشاشة الرئيسية والزوار
+Route::prefix('categories')->group(function () {
+    Route::get('/main', [CategoryController::class, 'getMainCategories']);
+    Route::get('/{id}/children', [CategoryController::class, 'getChildrenCategories']);
+});
+
+// 2. إضافة تقييم لمتجر (يتطلب تسجيل دخول المشتري auth:sanctum)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/stores/{storeId}/review', [StoreReviewController::class, 'store']);
+});
+// مسار المتاجر والمنتجات الرائجة (عمومي للزوار والمستخدمين)
+Route::get('/home/trending', [ProductController::class, 'getTrendingProducts']);
+//مسار عروض اليوم (Flash Sales)
+Route::get('/home/flash-sales', [ProductController::class, 'getFlashSales']);
+//مسار ارجاع المتاجر القريبة مني 
+Route::get('/stores/nearby', [StoreController::class, 'getNearbyStores']);
+//مسار تابع منتجات قد تعجبك /مقترحة لي 
+Route::get('/home/recommended', [ProductController::class, 'getRecommendedProducts']);

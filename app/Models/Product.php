@@ -4,7 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-
+use App\Models\Review;
+use App\Models\OrderItem;
 class Product extends Model
 {
     use HasFactory;
@@ -116,4 +117,14 @@ class Product extends Model
     {
         return $this->hasMany(Favorite::class);
     }
+    // داخل App\Models\Product.php
+public function reviews()
+{
+    return $this->hasMany(Review::class, 'product_id');
+}
+
+public function orderItems()
+{
+    return $this->hasMany(OrderItem::class, 'product_id');
+}
 }
