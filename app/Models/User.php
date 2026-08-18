@@ -173,6 +173,21 @@ class User extends Authenticatable
             ->withTimestamps();
     }
 
+    /**
+     * الطلبات التي قام بها المستخدم كمشتري
+     */
+    public function orders()
+    {
+        return $this->hasMany(Order::class, 'user_id');
+    }
+
+    /**
+     * الطلبات التي قام بها المستخدم كبائع
+     */
+    public function sellerOrders()
+    {
+        return $this->hasMany(Order::class, 'seller_id');
+    }
     // ============================================================
     // 🔥 علاقات الموظفين (Staff Management)
     // ============================================================
@@ -282,7 +297,8 @@ class User extends Authenticatable
         return $this->belongsTo(User::class);
     }
 
-    public function cartItems() {
-    return $this->hasMany(CartItem::class); // المشتري يملك عناصر في السلة
-}
+    public function cartItems()
+    {
+        return $this->hasMany(CartItem::class);
+    }
 }

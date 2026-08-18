@@ -16,10 +16,15 @@ return new class extends Migration {
 
             // معلومات وعلاقات المشتري والبائع (Foreign Keys)
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade');   // المشتري (Buyer)
-            // $table->foreignId('seller_id')->constrained('users')->onDelete('cascade'); // البائع (Seller)
-            $table->unsignedBigInteger('seller_id')->nullable()->change();
-            // إجمالي السعر الخاص بالفاتورة
-            $table->decimal('total_price', 15, 2);
+            $table->foreignId('seller_id')->constrained('users')->onDelete('cascade'); // البائع (Seller)
+
+            // ============================================================
+            // 📌 إجمالي السعر والضرائب (تم إضافة الحقول الجديدة)
+            // ============================================================
+            $table->decimal('total_price', 15, 2);                           // السعر النهائي شامل الضريبة والخصم
+            $table->decimal('subtotal_before_tax', 15, 2)->nullable();       // 🔥 المبلغ قبل الضريبة
+            $table->decimal('tax_amount', 15, 2)->nullable();                // 🔥 قيمة الضريبة
+            $table->json('tax_breakdown')->nullable();                      // 🔥 تفاصيل الضريبة لكل منتج
 
             // 2. حالات الطلب مدمجة بالكامل حسب التدفق المعتمد
             $table->enum('status', [
@@ -55,10 +60,15 @@ return new class extends Migration {
             $table->timestamp('delivered_at')->nullable();        // وقت الاستلام الفعلي (سواء ضغط زر المشتري أو تلقائي)
             $table->dateTime('estimated_delivery_date')->nullable(); // وقت التسليم المتوقع
 
-            // 🔥 حقول الكوبونات (المضافة حديثاً)
+            // 🔥 حقول الكوبونات
             $table->foreignId('coupon_id')->nullable()->constrained('coupons')->nullOnDelete();
             $table->decimal('discount_amount', 10, 2)->default(0);
 
+            // 🔥 نسبة العمولة عند الدفع
+            $table->decimal('commission_rate_snapshot', 5, 2)->default(0); // 🔥 نسبة العمولة
+
+            // 🔥🔥🔥 قيمة العمولة التي تأخذها المنصة (جديد)
+            $table->decimal('platform_commission', 15, 2)->default(0);
             // 6. الـ Timeline الزمني لحفظ تتبع مراحل الطلب (مصفوفة JSON)
             $table->json('status_timeline')->nullable();
 

@@ -279,7 +279,6 @@ class PaymentController extends Controller
             ], 200);
         });
     }
-
     // 4. عرض سجل العمليات (كشف الحساب) للمشتري
     public function getTransactionHistory()
     {
@@ -322,15 +321,15 @@ class PaymentController extends Controller
             $timeline = $order->status_timeline ?? [];
             $timeline[] = [
                 'status' => 'delivered',
-                'title'  => 'Buyer confirmed delivery. Funds unlocked successfully.',
-                'time'   => now()->toDateTimeString()
+                'title' => 'Buyer confirmed delivery. Funds unlocked successfully.',
+                'time' => now()->toDateTimeString()
             ];
 
             // تحويل حالة الطلب إلى delivered والدفع إلى مكتمل تماماً
             $order->update([
-                'status'          => 'delivered',
-                'payment_status'  => 'released',
-                'delivered_at'    => now(),
+                'status' => 'delivered',
+                'payment_status' => 'released',
+                'delivered_at' => now(),
                 'status_timeline' => $timeline
             ]);
 

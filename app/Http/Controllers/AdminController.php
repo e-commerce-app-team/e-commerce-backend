@@ -12,6 +12,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use App\Jobs\SendAdNotification;
 use Illuminate\Support\Facades\Storage; // 🔥 أضف هذا السطر
+use Carbon\Carbon;  // 🔥🔥🔥 أضف هذا السطر هنا
 
 class AdminController extends Controller
 {
@@ -1985,7 +1986,432 @@ class AdminController extends Controller
 
 
 
+    public function dashboardStats()
+    {
+        // ============================================================
+        // 📌 1. إحصائيات المستخدمين
+        // ============================================================
+        $totalUsers = User::count();
 
+        $newUsersThisMonth = User::whereMonth('created_at', Carbon::now()->month)
+            ->whereYear('created_at', Carbon::now()->year)
+            ->count();
+
+        $lastMonthUsers = User::whereMonth('created_at', Carbon::now()->subMonth()->month)
+            ->whereYear('created_at', Carbon::now()->subMonth()->year)
+            ->count();
+
+        $usersChange = $lastMonthUsers > 0
+            ? round((($newUsersThisMonth - $lastMonthUsers) / $lastMonthUsers) * 100, 1)
+            : 0;
+
+        // ============================================================
+        // 📌 2. إحصائيات الطلبات
+        // ============================================================
+        $totalOrders = Order::count();
+
+        // 🔥 الطريقة الصحيحة - باستخدام pluck و toArray
+        $ordersByStatus = Order::select('status', \DB::raw('count(*) as count'))
+            ->groupBy('status')
+            ->get()
+            ->pluck('count', 'status')
+            ->toArray();
+
+        $ordersByStatusArabic = [
+            'pending' => $ordersByStatus['pending'] ?? 0,
+            'processing' => $ordersByStatus['processing'] ?? 0,
+            'shipped' => $ordersByStatus['shipped'] ?? 0,
+            'delivered' => $ordersByStatus['delivered'] ?? 0,
+            'cancelled_returned' => $ordersByStatus['cancelled_returned'] ?? 0,
+        ];
+
+        // إجمالي المبيعات
+        $totalSales = Order::whereIn('status', ['delivered', 'shipped', 'processing'])
+            ->sum('total_price');
+
+        $currentMonthSales = Order::whereIn('status', ['delivered', 'shipped', 'processing'])
+            ->whereMonth('created_at', Carbon::now()->month)
+            ->whereYear('created_at', Carbon::now()->year)
+            ->sum('total_price');
+
+        $lastMonthSales = Order::whereIn('status', ['delivered', 'shipped', 'processing'])
+            ->whereMonth('created_at', Carbon::now()->subMonth()->month)
+            ->whereYear('created_at', Carbon::now()->subMonth()->year)
+            ->sum('total_price');
+
+        $salesChange = $lastMonthSales > 0
+            ? round((($currentMonthSales - $lastMonthSales) / $lastMonthSales) * 100, 1)
+            : 0;
+
+        // تغير الطلبات
+        $currentMonthOrders = Order::whereMonth('created_at', Carbon::now()->month)
+            ->whereYear('created_at', Carbon::now()->year)
+            ->count();
+
+        $lastMonthOrders = Order::whereMonth('created_at', Carbon::now()->subMonth()->month)
+            ->whereYear('created_at', Carbon::now()->subMonth()->year)
+            ->count();
+
+        $ordersChange = $lastMonthOrders > 0
+            ? round((($currentMonthOrders - $lastMonthOrders) / $lastMonthOrders) * 100, 1)
+            : 0;
+
+        // ============================================================
+        // 📌 3. إحصائيات الإعلانات
+        // ============================================================
+        $expiredAds = Ad::where('status', 'expired')->count();
+        $activeAds = Ad::where('status', 'active')->count();
+
+        $adRevenue = Ad::whereIn('status', ['active', 'expired'])->sum('price');
+
+        $currentMonthRevenue = Ad::whereIn('status', ['active', 'expired'])
+            ->whereMonth('created_at', Carbon::now()->month)
+            ->whereYear('created_at', Carbon::now()->year)
+            ->sum('price');
+
+        $lastMonthRevenue = Ad::whereIn('status', ['active', 'expired'])
+            ->whereMonth('created_at', Carbon::now()->subMonth()->month)
+            ->whereYear('created_at', Carbon::now()->subMonth()->year)
+            ->sum('price');
+
+        $revenueChange = $lastMonthRevenue > 0
+            ? round((($currentMonthRevenue - $lastMonthRevenue) / $lastMonthRevenue) * 100, 1)
+            : 0;
+
+        // ============================================================
+        // 📌 4. المبيعات الشهرية (آخر 6 أشهر)
+        // ============================================================
+        $monthlySales = Order::whereIn('status', ['delivered', 'shipped', 'processing'])
+            ->where('created_at', '>=', Carbon::now()->subMonths(6)->startOfMonth())
+            ->select(
+                \DB::raw('DATE_FORMAT(created_at, "%Y-%m") as month'),
+                \DB::raw('SUM(total_price) as total')
+            )
+            ->groupBy('month')
+            ->orderBy('month', 'asc')
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'month' => Carbon::createFromFormat('Y-m', $item->month)->translatedFormat('F'),
+                    'total' => round($item->total, 2),
+                ];
+            });
+
+        // ============================================================
+        // 📌 5. التجميع والإرجاع
+        // ============================================================
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'stats' => [
+                    'total_users' => $totalUsers,
+                    'users_change' => $usersChange,
+                    'total_orders' => $totalOrders,
+                    'orders_change' => $ordersChange,
+                    'total_sales' => round($totalSales, 2),
+                    'sales_change' => $salesChange,
+                    'ad_revenue' => round($adRevenue, 2),
+                    'revenue_change' => $revenueChange,
+                    'expired_ads' => $expiredAds,
+                    'active_ads' => $activeAds,
+                ],
+                'orders_by_status' => $ordersByStatusArabic,
+                'monthly_sales' => $monthlySales,
+            ]
+        ]);
+    }
+
+
+
+    // 📌 المنتجات الأكثر مبيعاً
+// ============================================================
+    public function topSellingProducts(Request $request)
+    {
+        $limit = $request->input('limit', 10);
+
+        $products = Product::select(
+            'id',
+            'name',
+            'original_price',
+            'sales_count',
+            'quantity',
+            'status',
+            'user_id'
+        )
+            ->with('seller:id,first_name,last_name,store_name')
+            ->orderBy('sales_count', 'desc')
+            ->limit($limit)
+            ->get();
+
+        $formattedProducts = $products->map(function ($product) {
+            return [
+                'id' => $product->id,
+                'name' => $product->name,
+                'price' => $product->original_price,
+                'sales_count' => $product->sales_count,
+                'quantity' => $product->quantity,
+                'status' => $product->status,
+                'seller' => $product->seller ? [
+                    'id' => $product->seller->id,
+                    'name' => $product->seller->first_name . ' ' . $product->seller->last_name,
+                    'store_name' => $product->seller->store_name,
+                ] : null,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $formattedProducts,
+            'total' => $formattedProducts->count(),
+        ]);
+    }
+
+    // 📌 المنتجات الأقل مبيعاً
+// ============================================================
+    public function leastSellingProducts(Request $request)
+    {
+        $limit = $request->input('limit', 10);
+
+        $products = Product::select(
+            'id',
+            'name',
+            'original_price',
+            'sales_count',
+            'quantity',
+            'status',
+            'user_id'
+        )
+            ->with('seller:id,first_name,last_name,store_name')
+            ->where('sales_count', '>=', 0)
+            ->orderBy('sales_count', 'asc')
+            ->limit($limit)
+            ->get();
+
+        $formattedProducts = $products->map(function ($product) {
+            return [
+                'id' => $product->id,
+                'name' => $product->name,
+                'price' => $product->original_price,
+                'sales_count' => $product->sales_count,
+                'quantity' => $product->quantity,
+                'status' => $product->status,
+                'seller' => $product->seller ? [
+                    'id' => $product->seller->id,
+                    'name' => $product->seller->first_name . ' ' . $product->seller->last_name,
+                    'store_name' => $product->seller->store_name,
+                ] : null,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $formattedProducts,
+            'total' => $formattedProducts->count(),
+        ]);
+    }
+
+    // 📌 أرباح الإعلانات الشهرية (آخر 12 شهر)
+// ============================================================
+    public function adRevenueMonthly(Request $request)
+    {
+        $months = $request->input('months', 12);
+
+        $revenue = Ad::whereIn('status', ['active', 'expired'])
+            ->where('created_at', '>=', Carbon::now()->subMonths($months)->startOfMonth())
+            ->select(
+                \DB::raw('DATE_FORMAT(created_at, "%Y-%m") as month'),
+                \DB::raw('SUM(price) as total')
+            )
+            ->groupBy('month')
+            ->orderBy('month', 'asc')
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'month' => Carbon::createFromFormat('Y-m', $item->month)->translatedFormat('F'),
+                    'total' => round($item->total, 2),
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $revenue,
+        ]);
+    }
+
+    // 📌 نمو المستخدمين الشهري (آخر 12 شهر)
+// ============================================================
+    public function usersGrowthMonthly(Request $request)
+    {
+        $months = $request->input('months', 12);
+
+        $growth = User::where('created_at', '>=', Carbon::now()->subMonths($months)->startOfMonth())
+            ->select(
+                \DB::raw('DATE_FORMAT(created_at, "%Y-%m") as month'),
+                \DB::raw('COUNT(*) as total')
+            )
+            ->groupBy('month')
+            ->orderBy('month', 'asc')
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'month' => Carbon::createFromFormat('Y-m', $item->month)->translatedFormat('F'),
+                    'total' => $item->total,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $growth,
+        ]);
+    }
+
+    // 📌 الإعلانات الأكثر أداءً (حسب المشاهدات والنقرات)
+// ============================================================
+    public function topPerformingAds(Request $request)
+    {
+        $limit = $request->input('limit', 10);
+
+        $ads = Ad::select(
+            'id',
+            'title',
+            'type',
+            'price',
+            'views_count',
+            'clicks_count',
+            'status',
+            'seller_id'
+        )
+            ->with('seller:id,first_name,last_name,store_name')
+            ->where('status', 'active')
+            ->orderBy('views_count', 'desc')
+            ->limit($limit)
+            ->get();
+
+        $formattedAds = $ads->map(function ($ad) {
+            $ctr = $ad->views_count > 0
+                ? round(($ad->clicks_count / $ad->views_count) * 100, 2)
+                : 0;
+
+            return [
+                'id' => $ad->id,
+                'title' => $ad->title,
+                'type' => $ad->type,
+                'type_label' => $this->getAdTypeLabel($ad->type),
+                'price' => $ad->price,
+                'views' => $ad->views_count,
+                'clicks' => $ad->clicks_count,
+                'ctr' => $ctr . '%',
+                'status' => $ad->status,
+                'seller' => $ad->seller ? [
+                    'id' => $ad->seller->id,
+                    'name' => $ad->seller->first_name . ' ' . $ad->seller->last_name,
+                    'store_name' => $ad->seller->store_name,
+                ] : null,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $formattedAds,
+        ]);
+    }
+
+    // 📌 أفضل المشتريين (حسب عدد الطلبات والإنفاق)
+// ============================================================
+    public function topBuyers(Request $request)
+    {
+        $limit = $request->input('limit', 10);
+
+        $buyers = User::where('role', 'buyer')
+            ->withCount('orders')
+            ->withSum('orders', 'total_price')
+            ->having('orders_count', '>', 0)
+            ->orderBy('orders_count', 'desc')
+            ->limit($limit)
+            ->get();
+
+        $formattedBuyers = $buyers->map(function ($buyer) {
+            // حساب النفقات (مصاريف الشحن أو العمولات)
+            $expenses = $buyer->orders_sum_total_price * 0.05;
+
+            // أرباح الإعلانات (إذا كان المشتري يملك إعلانات)
+            $adRevenue = Ad::where('seller_id', $buyer->id)->sum('price');
+
+            return [
+                'id' => $buyer->id,
+                'name' => $buyer->first_name . ' ' . $buyer->last_name,
+                'orders_count' => $buyer->orders_count,
+                'total_spent' => round($buyer->orders_sum_total_price ?? 0, 2),
+                'expenses' => round($expenses, 2),
+                'ad_revenue' => round($adRevenue, 2),
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $formattedBuyers,
+        ]);
+    }
+
+
+    // 📌 أحدث الطلبات (آخر 10 طلبات)
+// ============================================================
+    public function latestOrders(Request $request)
+    {
+        $limit = $request->input('limit', 10);
+
+        $orders = Order::with([
+            'buyer' => function ($query) {
+                $query->select('id', 'first_name', 'last_name', 'email', 'phone');
+            },
+            'seller' => function ($query) {
+                $query->select('id', 'first_name', 'last_name', 'store_name', 'email', 'phone');
+            }
+        ])
+            ->select(
+                'id',
+                'user_id',
+                'seller_id',
+                'total_price',
+                'status',
+                'payment_status',
+                'payment_method',
+                'created_at'
+            )
+            ->latest()
+            ->limit($limit)
+            ->get();
+
+        $formattedOrders = $orders->map(function ($order) {
+            return [
+                'id' => $order->id,
+                'order_number' => 'ORD-' . str_pad($order->id, 6, '0', STR_PAD_LEFT),
+                'buyer' => $order->buyer ? [
+                    'id' => $order->buyer->id,
+                    'name' => $order->buyer->first_name . ' ' . $order->buyer->last_name,
+                ] : null,
+                'seller' => $order->seller ? [
+                    'id' => $order->seller->id,
+                    'name' => $order->seller->first_name . ' ' . $order->seller->last_name,
+                    'store_name' => $order->seller->store_name,
+                ] : null,
+                'total_price' => $order->total_price,
+                'status' => $order->status,
+                'status_label' => $this->getOrderStatusLabel($order->status),
+                'payment_status' => $order->payment_status,
+                'payment_label' => $this->getPaymentStatusLabel($order->payment_status),
+                'payment_method' => $order->payment_method,
+                'created_at' => $order->created_at?->toDateTimeString(),
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $formattedOrders,
+            'total' => $formattedOrders->count(),
+        ]);
+    }
 
 
     // ============================================================

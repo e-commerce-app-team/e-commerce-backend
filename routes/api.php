@@ -1,4 +1,5 @@
 <?php
+use App\Http\Controllers\ProductController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdController;
@@ -10,7 +11,7 @@ use App\Http\Controllers\ChatController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
- use App\Http\Controllers\Buyer\AddressController;
+use App\Http\Controllers\Buyer\AddressController;
 use App\Http\Controllers\Buyer\CartController;
 use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
@@ -259,7 +260,32 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('ads/{id}/deactivate', [AdminController::class, 'deactivateAd'])->middleware(['auth:sanctum', 'super_admin']);
 
     // إحصائيات الإعلانات
-    Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'isSuperAdmin']);
+    Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/dashboard/stats', [AdminController::class, 'dashboardStats'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/orders/latest', [AdminController::class, 'latestOrders'])->middleware(['auth:sanctum', 'super_admin']);
+
+    // 📌 ضع Routes الجديدة هنا (بعد dashboardStats)
+// 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥
+    Route::middleware(['auth:sanctum', 'super_admin'])->group(function () {
+        // المنتجات الأكثر مبيعاً
+        Route::get('admin/products/top-selling', [AdminController::class, 'topSellingProducts']);
+
+        // المنتجات الأقل مبيعاً
+        Route::get('admin/products/least-selling', [AdminController::class, 'leastSellingProducts']);
+
+        // أرباح الإعلانات الشهرية
+        Route::get('admin/ad-revenue/monthly', [AdminController::class, 'adRevenueMonthly']);
+
+        // نمو المستخدمين الشهري
+        Route::get('admin/users-growth/monthly', [AdminController::class, 'usersGrowthMonthly']);
+
+        // الإعلانات الأكثر أداءً
+        Route::get('admin/ads/top-performing', [AdminController::class, 'topPerformingAds']);
+
+        // أفضل المشتريين
+        Route::get('admin/buyers/top', [AdminController::class, 'topBuyers']);
+    });
+    // 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥
 
     // إدارة الأقسام والتصنيفات (Admin Category Management)
     Route::post('categories/store', [CategoryController::class, 'storeCategory'])->middleware(['auth:sanctum', 'super_admin']);
@@ -322,11 +348,11 @@ Route::prefix('buyer')->group(function () {
     Route::get('/stores/{store_id}/products', [StoreController::class, 'getStoreProducts']);
     // منتجات قسم معين
     Route::get('/department/{department_id}/products', [StoreController::class, 'getdepartmentProducts']);
-// رابط جلب تقييمات متجر معين
-Route::get('/stores/{id}/reviews', [StoreController::class, 'getStoreReviews']);
-Route::post('/stores/{id}/reviews', [StoreController::class, 'addStoreReview'])->middleware('auth:sanctum');
-Route::post('/stores/{id}/follow', [StoreController::class, 'toggleFollow'])->middleware('auth:sanctum');
-// السلة
+    // رابط جلب تقييمات متجر معين
+    Route::get('/stores/{id}/reviews', [StoreController::class, 'getStoreReviews']);
+    Route::post('/stores/{id}/reviews', [StoreController::class, 'addStoreReview'])->middleware('auth:sanctum');
+    Route::post('/stores/{id}/follow', [StoreController::class, 'toggleFollow'])->middleware('auth:sanctum');
+    // السلة
     Route::post('/cart/add', [CartController::class, 'addToCart'])->middleware('auth:sanctum');
     Route::get('/cart', [CartController::class, 'getCart'])->middleware('auth:sanctum');
     Route::put('/cart/update/{id}', [CartController::class, 'updateQty'])->middleware('auth:sanctum');
@@ -344,7 +370,7 @@ Route::post('/stores/{id}/follow', [StoreController::class, 'toggleFollow'])->mi
     // إتمام الطلب
     Route::post('/checkout', [CartController::class, 'checkout'])->middleware('auth:sanctum');
     Route::get('/orders', [OrderController::class, 'index'])->middleware('auth:sanctum');
-    });
+});
 
 //رابط ارجاع الاقسام الرئيسية للمنصة كاملة 
 Route::get('/department', [MerchantDepartment::class, 'getTree']);
