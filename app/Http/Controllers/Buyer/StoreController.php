@@ -63,7 +63,7 @@ class StoreController extends Controller
         if ($categories->isEmpty()) {
             return response()->json([
                 'success' => true,
-                'message' => 'هذا المتجر لا يملك أي أقسام حالياً',
+                'message' => 'This store does not have any departments currently',
                 'data' => []
             ], 200);
         }
@@ -121,7 +121,7 @@ class StoreController extends Controller
         if ($reviews->isEmpty()) {
             return response()->json([
                 'success' => true,
-                'message' => 'لا توجد تقييمات لهذا المتجر بعد',
+                'message' => 'There are no reviews for this store yet',
                 'data'    => [],
                 'stats'   => [
                     'average_rating' => 0,

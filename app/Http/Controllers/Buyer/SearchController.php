@@ -9,9 +9,9 @@ use Illuminate\Http\Request;
 
 class SearchController extends Controller
 {
-    /**
-     * البحث الشامل والذكي (منتجات ومتاجر وأقسام)
-     */
+    
+     // البحث الشامل والذكي (منتجات ومتاجر وأقسام)
+     
     public function search(Request $request)
     {
         $queryText = $request->get('q'); 
@@ -85,9 +85,8 @@ class SearchController extends Controller
         ], 200);
     }
 
-    /**
-     * الاقتراحات الفورية السريعة أثناء الكتابة
-     */
+    
+     // الاقتراحات الفورية السريعة أثناء الكتابة
     public function suggestions(Request $request)
     {
         $queryText = $request->get('q');
