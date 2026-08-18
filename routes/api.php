@@ -396,3 +396,5 @@ Route::prefix('categories')->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/stores/{storeId}/review', [StoreReviewController::class, 'store']);
 });
+// مسار المتاجر والمنتجات الرائجة (عمومي للزوار والمستخدمين)
+Route::get('/home/trending', [ProductController::class, 'getTrendingProducts']);

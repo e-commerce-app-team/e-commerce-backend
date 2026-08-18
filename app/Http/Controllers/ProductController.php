@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use App\Notifications\NewProductNotification;
 use Illuminate\Support\Facades\Notification;
+use Carbon\Carbon;
 
 class ProductController extends Controller
 {
@@ -512,58 +513,58 @@ class ProductController extends Controller
     }
 
     // تابع جلب بيانات منتج معين حسب ال id  اي بشكل عام بيانات المنتج التفصيلية ولاي متجر تابع 
-public function showProductDetails($id)
-{
-    // 1. جلب المنتج مع حساب متوسط التقييم وعدد المراجعات
-    $product = \App\Models\Product::with([
-        'variants',
-        'seller:id,store_name,store_logo,store_description',
-        'reviews.user:id,first_name,last_name,profile_photo'
-    ])
-    ->withAvg('reviews as rating', 'rating')
-    ->withCount('reviews as reviews_count')
-    ->find($id);
+    public function showProductDetails($id)
+    {
+        // 1. جلب المنتج مع حساب متوسط التقييم وعدد المراجعات
+        $product = \App\Models\Product::with([
+            'variants',
+            'seller:id,store_name,store_logo,store_description',
+            'reviews.user:id,first_name,last_name,profile_photo'
+        ])
+            ->withAvg('reviews as rating', 'rating')
+            ->withCount('reviews as reviews_count')
+            ->find($id);
 
-    if (!$product) {
-        return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
+        if (!$product) {
+            return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
+        }
+
+        // 2. المنتجات المشابهة
+        $similarProducts = \App\Models\Product::where('department_id', $product->department_id)
+            ->where('id', '!=', $id)
+            ->limit(4)
+            ->get();
+
+        // 3. بناء الاستجابة بالتقييمات الحقيقية
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'product' => array_merge($product->toArray(), [
+                    'rating'        => round($product->rating ?? 0, 2),
+                    'reviews_count' => $product->reviews_count,
+                ]),
+                'similar_products' => $similarProducts,
+                'reviews' => $product->reviews->map(function ($review) {
+                    $fullName = trim(($review->user->first_name ?? '') . ' ' . ($review->user->last_name ?? ''));
+                    return [
+                        'id'         => $review->id,
+                        'rating'     => $review->rating,
+                        'comment'    => $review->comment,
+                        'created_at' => $review->created_at->format('Y-m-d H:i'),
+                        'user'       => [
+                            'id'            => $review->user->id ?? null,
+                            'first_name'    => $review->user->first_name ?? null,
+                            'last_name'     => $review->user->last_name ?? null,
+                            'name'          => !empty($fullName) ? $fullName : 'مشتري',
+                            'profile_photo' => isset($review->user->profile_photo)
+                                ? asset('storage/' . $review->user->profile_photo)
+                                : null,
+                        ]
+                    ];
+                })
+            ]
+        ], 200);
     }
-
-    // 2. المنتجات المشابهة
-    $similarProducts = \App\Models\Product::where('department_id', $product->department_id)
-        ->where('id', '!=', $id)
-        ->limit(4)
-        ->get();
-
-    // 3. بناء الاستجابة بالتقييمات الحقيقية
-    return response()->json([
-        'success' => true,
-        'data' => [
-            'product' => array_merge($product->toArray(), [
-                'rating'        => round($product->rating ?? 0, 2),
-                'reviews_count' => $product->reviews_count,
-            ]),
-            'similar_products' => $similarProducts,
-            'reviews' => $product->reviews->map(function ($review) {
-                $fullName = trim(($review->user->first_name ?? '') . ' ' . ($review->user->last_name ?? ''));
-                return [
-                    'id'         => $review->id,
-                    'rating'     => $review->rating,
-                    'comment'    => $review->comment,
-                    'created_at' => $review->created_at->format('Y-m-d H:i'),
-                    'user'       => [
-                        'id'            => $review->user->id ?? null,
-                        'first_name'    => $review->user->first_name ?? null,
-                        'last_name'     => $review->user->last_name ?? null,
-                        'name'          => !empty($fullName) ? $fullName : 'مشتري',
-                        'profile_photo' => isset($review->user->profile_photo) 
-                                            ? asset('storage/' . $review->user->profile_photo) 
-                                            : null,
-                    ]
-                ];
-            })
-        ]
-    ], 200);
-}
 
 
     // تسجيل مشاهدة لمنتج معين
@@ -583,6 +584,76 @@ public function showProductDetails($id)
             'success' => true,
             'message' => 'View recorded successfully',
             'views_count' => $product->views
+        ], 200);
+    }
+    //تابع جلب المنتجات الرائجه بالهوم بيج 
+    public function getTrendingProducts(Request $request)
+    {
+        $limit = $request->input('limit', 10);
+        $locale = app()->getLocale();
+
+        // 1. محاولة جلب المنتجات الأكثر طلباً في آخر 7 أيام
+        $products = Product::where('status', 'active')
+            ->has('orderItems')
+            ->withCount(['orderItems as orders_count' => function ($query) {
+                $query->where('created_at', '>=', Carbon::now()->subDays(7));
+            }])
+            ->having('orders_count', '>', 0)
+            ->orderByDesc('orders_count')
+            ->limit($limit)
+            ->get();
+
+        // 2. Fallback: إذا كانت القائمة فارغة، نجلب الأكثر طلباً بشكل عام (All-time)
+        if ($products->isEmpty()) {
+            $products = Product::where('status', 'active')
+                ->has('orderItems')
+                ->withCount('orderItems as orders_count')
+                ->having('orders_count', '>', 0)
+                ->orderByDesc('orders_count')
+                ->limit($limit)
+                ->get();
+        }
+
+        // 3. Fallback إضافي: إذا لم تكن هناك أي طلبات في النظام مطلقاً، نجلب أحدث المنتجات
+        if ($products->isEmpty()) {
+            $products = Product::where('status', 'active')
+                ->latest()
+                ->limit($limit)
+                ->get()
+                ->map(function ($product) {
+                    $product->orders_count = 0;
+                    return $product;
+                });
+        }
+
+        // إرجاع الاستجابة بنفس التنسيق
+        return response()->json([
+            'success' => true,
+            'data' => $products->map(function ($product) use ($locale) {
+                $name = $product->name;
+
+                if (is_array($name)) {
+                    $name = $name[$locale] ?? $name['ar'] ?? reset($name);
+                } elseif (is_string($name) && str_starts_with($name, '{')) {
+                    $decoded = json_decode($name, true);
+                    if (is_array($decoded)) {
+                        $name = $decoded[$locale] ?? $decoded['ar'] ?? reset($decoded);
+                    }
+                }
+
+                $images = is_array($product->images)
+                    ? array_map(fn($img) => str_starts_with($img, 'http') ? $img : asset('storage/' . $img), $product->images)
+                    : [];
+
+                return [
+                    'id'             => $product->id,
+                    'name'           => $name,
+                    'original_price' => $product->original_price,
+                    'offer_price'    => $product->offer_price,
+                    'images'         => $images,
+                    'orders_count'   => $product->orders_count,
+                ];
+            })
         ], 200);
     }
 }
