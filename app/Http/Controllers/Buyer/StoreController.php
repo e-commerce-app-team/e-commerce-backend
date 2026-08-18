@@ -245,4 +245,63 @@ class StoreController extends Controller
             'data'    => $stores
         ], 200);
     }
+//تابع المتاجر القريبة مني
+public function getNearbyStores(Request $request)
+{
+    // 1. التحقق من المدخلات المطلوبة
+    $request->validate([
+        'lat'    => 'required|numeric|between:-90,90',
+        'lng'    => 'required|numeric|between:-180,180',
+        'radius' => 'nullable|numeric|min:0.1', // النطاق بالكيلومتر (الافتراضي 10)
+    ]);
+
+    $userLat = $request->input('lat');
+    $userLng = $request->input('lng');
+    $radius  = $request->input('radius', 10);
+    $limit   = $request->input('limit', 10);
+
+    // 2. معادلة Haversine لحساب المسافة بالـ KM
+    $haversine = "(6371 * acos(
+        cos(radians(?)) 
+        * cos(radians(latitude)) 
+        * cos(radians(longitude) - radians(?)) 
+        + sin(radians(?)) 
+        * sin(radians(latitude))
+    ))";
+
+    // 3. الاستعلام عن التجار المعتمدين (approved)
+    $stores = User::select('users.*')
+        ->selectRaw("{$haversine} AS distance_km", [$userLat, $userLng, $userLat])
+        ->whereIn('role', ['vendor', 'wholesale'])
+        ->where('status', 'approved') // تم التحديث إلى approved
+        ->whereNotNull('latitude')
+        ->whereNotNull('longitude')
+        ->having('distance_km', '<=', $radius)
+        ->orderBy('distance_km', 'asc')
+        ->limit($limit)
+        ->get();
+
+    // 4. تنسيق الاستجابة
+    return response()->json([
+        'success' => true,
+        'data'    => $stores->map(function ($store) {
+            $logo = $store->store_logo 
+                ? (str_starts_with($store->store_logo, 'http') ? $store->store_logo : asset('storage/' . $store->store_logo))
+                : null;
+
+            return [
+                'id'                => $store->id,
+                'store_name'        => $store->store_name ?? ($store->first_name . ' ' . $store->last_name),
+                'store_description' => $store->store_description,
+                'store_logo'        => $logo,
+                'category'          => $store->category,
+                'latitude'          => (float) $store->latitude,
+                'longitude'         => (float) $store->longitude,
+                'detailed_address'  => $store->detailed_address,
+                'distance_km'       => round((float) $store->distance_km, 2),
+            ];
+        })
+    ], 200);
+}
+
 }

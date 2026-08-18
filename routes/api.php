@@ -400,3 +400,5 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::get('/home/trending', [ProductController::class, 'getTrendingProducts']);
 //مسار عروض اليوم (Flash Sales)
 Route::get('/home/flash-sales', [ProductController::class, 'getFlashSales']);
+//مسار ارجاع المتاجر القريبة مني 
+Route::get('/stores/nearby', [StoreController::class, 'getNearbyStores']);
