@@ -12,37 +12,37 @@ return new class extends Migration {
 
             // العلاقات (البائع والتصنيف)
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
-            $table->foreignId('category_id')->constrained('categories')->onDelete('cascade');
+            $table->foreignId('category_id')->nullable()->constrained('categories')->onDelete('cascade');
 
             // البيانات الأساسية والوسائط
             $table->string('name');
             $table->text('description');
-            $table->json('images'); // مصفوفة الصور (حتى 10 صور)
-            $table->string('video_url')->nullable(); // فيديو اختياري
+            $table->json('images'); // مصفوفة الصور
+            $table->string('video_url')->nullable();
 
-            // الأسعار (العادي، الجملة، والعروض)
+            // الأسعار
             $table->decimal('original_price', 15, 2);
-            $table->decimal('wholesale_price', 15, 2)->nullable(); // حقل الجملة
+            $table->decimal('wholesale_price', 15, 2)->nullable();
             $table->decimal('offer_price', 15, 2)->nullable();
-            $table->timestamp('offer_expires_at')->nullable(); // تاريخ انتهاء العرض
+            $table->timestamp('offer_expires_at')->nullable();
 
             // الرموز والكميات والمستودعات
             $table->string('sku')->unique();
             $table->integer('quantity')->default(0);
-            $table->integer('min_wholesale_qty')->nullable(); // الحد الأدنى للجملة
-            $table->json('warehouse_stock')->nullable();      // توزيع الكميات على الفروع
-            $table->integer('alert_threshold')->default(5);   // حد التنبيه للنقص
+            $table->integer('min_wholesale_qty')->nullable();
+            $table->json('warehouse_stock')->nullable();
+            $table->integer('alert_threshold')->default(5);
 
-            // الأبعاد والوزن لحساب تكاليف الشحن
+            // الأبعاد والوزن
             $table->decimal('weight', 8, 2)->nullable();
             $table->decimal('length', 8, 2)->nullable();
             $table->decimal('width', 8, 2)->nullable();
             $table->decimal('height', 8, 2)->nullable();
 
-            // الحالة وإعدادات الشحن
+            // الحالة وإعدادات الشحن والمشاهدات
             $table->enum('status', ['active', 'draft', 'hidden'])->default('draft');
-            $table->unsignedInteger('views')->default(0);
-            $table->boolean('is_free_shipping')->default(false); // الشحن المجاني
+            $table->unsignedBigInteger('views')->default(0); // تم تثبيت الحقل هنا بأسلوب صحيح
+            $table->boolean('is_free_shipping')->default(false);
 
             $table->timestamps();
         });
@@ -51,7 +51,5 @@ return new class extends Migration {
     public function down(): void
     {
         Schema::dropIfExists('products');
-
     }
-
 };

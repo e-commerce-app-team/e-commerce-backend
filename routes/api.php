@@ -16,7 +16,7 @@ use App\Http\Controllers\Buyer\NotificationController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\StoreReviewController;
-use App\Http\Controllers\StoreController;
+use App\Http\Controllers\Buyer\StoreController;
 use App\Http\Controllers\Buyer\CartController;
 use App\Http\Controllers\Buyer\BannerController;
 use App\Http\Controllers\OtpController;

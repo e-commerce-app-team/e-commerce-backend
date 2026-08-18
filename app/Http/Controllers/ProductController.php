@@ -67,7 +67,7 @@ class ProductController extends Controller
                 ProductVariant::create($variantFields);
             }
         }
- // 5.5 إرسال الإشعار لجميع متابعي البائع/المتجر الحالي
+        // 5.5 إرسال الإشعار لجميع متابعي البائع/المتجر الحالي
         $followers = $user->storeFollowers;
 
         if ($followers && $followers->count() > 0) {
@@ -79,9 +79,6 @@ class ProductController extends Controller
             'message' => 'Product and its variants created successfully.',
             'data' => $product->load('variants')
         ], 201);
-        
-
-
     }
 
     public function update(ProductSaveRequest $request, $id): JsonResponse
@@ -461,7 +458,7 @@ class ProductController extends Controller
             'data' => $products
         ], 200);
     }
-    
+
     //فلاتر: الأقسام، السعر، التقييم، الشحن المجاني، العروض فقط
     public function FilttetByForBuyer(Request $request)
     {
@@ -515,32 +512,58 @@ class ProductController extends Controller
     }
 
     // تابع جلب بيانات منتج معين حسب ال id  اي بشكل عام بيانات المنتج التفصيلية ولاي متجر تابع 
-    public function showProductDetails($id)
-    {
-        $product = \App\Models\Product::with([
-            'variants',
-            'seller:id,store_name,store_logo,store_description'
-        ])->find($id);
+public function showProductDetails($id)
+{
+    // 1. جلب المنتج مع حساب متوسط التقييم وعدد المراجعات
+    $product = \App\Models\Product::with([
+        'variants',
+        'seller:id,store_name,store_logo,store_description',
+        'reviews.user:id,first_name,last_name,profile_photo'
+    ])
+    ->withAvg('reviews as rating', 'rating')
+    ->withCount('reviews as reviews_count')
+    ->find($id);
 
-        if (!$product) {
-            return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
-        }
-
-        // جلب منتجات مشابهة (مثلاً في نفس القسم أو نفس المتجر)
-        $similarProducts = \App\Models\Product::where('department_id', $product->department_id)
-            ->where('id', '!=', $id)
-            ->limit(4)
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'product' => $product,
-                'similar_products' => $similarProducts,
-                'reviews_placeholder' => "نظام التقييمات قيد التطوير"
-            ]
-        ], 200);
+    if (!$product) {
+        return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
     }
+
+    // 2. المنتجات المشابهة
+    $similarProducts = \App\Models\Product::where('department_id', $product->department_id)
+        ->where('id', '!=', $id)
+        ->limit(4)
+        ->get();
+
+    // 3. بناء الاستجابة بالتقييمات الحقيقية
+    return response()->json([
+        'success' => true,
+        'data' => [
+            'product' => array_merge($product->toArray(), [
+                'rating'        => round($product->rating ?? 0, 2),
+                'reviews_count' => $product->reviews_count,
+            ]),
+            'similar_products' => $similarProducts,
+            'reviews' => $product->reviews->map(function ($review) {
+                $fullName = trim(($review->user->first_name ?? '') . ' ' . ($review->user->last_name ?? ''));
+                return [
+                    'id'         => $review->id,
+                    'rating'     => $review->rating,
+                    'comment'    => $review->comment,
+                    'created_at' => $review->created_at->format('Y-m-d H:i'),
+                    'user'       => [
+                        'id'            => $review->user->id ?? null,
+                        'first_name'    => $review->user->first_name ?? null,
+                        'last_name'     => $review->user->last_name ?? null,
+                        'name'          => !empty($fullName) ? $fullName : 'مشتري',
+                        'profile_photo' => isset($review->user->profile_photo) 
+                                            ? asset('storage/' . $review->user->profile_photo) 
+                                            : null,
+                    ]
+                ];
+            })
+        ]
+    ], 200);
+}
 
 
     // تسجيل مشاهدة لمنتج معين
@@ -550,7 +573,7 @@ class ProductController extends Controller
         $product = \App\Models\Product::find($id);
 
         if (!$product) {
-            return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);
+            return response()->json(['success' => false, 'message' => 'Product not found'], 404);
         }
 
         // زيادة قيمة المشاهدات بمقدار 1
@@ -558,7 +581,7 @@ class ProductController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'تم تسجيل المشاهدة بنجاح',
+            'message' => 'View recorded successfully',
             'views_count' => $product->views
         ], 200);
     }
