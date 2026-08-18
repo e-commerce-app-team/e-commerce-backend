@@ -142,6 +142,24 @@ class UserController extends Controller
 
         ]);
     }
+
+    public function saveFcmToken(Request $request)
+    {
+        $request->validate([
+            'fcm_token' => 'required|string',
+            'device'    => 'nullable|string|max:50',
+        ]);
+
+        $request->user()->update([
+            'fcm_token' => $request->fcm_token,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'FCM token saved successfully.',
+        ]);
+    }
+
     public function registerBuyer(BuyerRegisterRequest $request)
     {
         // 1. جلب البيانات المفحوصة
@@ -670,24 +688,19 @@ class UserController extends Controller
         }
 
         $request->validate([
-            'code' => 'required|string'
+            'code'        => 'required|string',
+            'order_total' => 'nullable|numeric|min:0',
+            'seller_id'   => 'nullable|integer|exists:users,id',
+            'product_ids' => 'nullable|array',
         ]);
 
-        // 🔥🔥🔥 جيب السعر من Cache
-        $orderTotal = Cache::get('order_total_' . $user->id);
-        $productIds = Cache::get('order_product_ids_' . $user->id) ?? [];
+        $orderTotal = $request->order_total ?? Cache::get('order_total_' . $user->id);
+        $productIds = $request->product_ids ?? Cache::get('order_product_ids_' . $user->id) ?? [];
 
-        // 🔥 إذا ما في Cache، جيب من الـ Request (للتوافق مع القديم)
-        if (!$orderTotal && $request->has('order_total')) {
-            $orderTotal = $request->order_total;
-            $productIds = $request->product_ids ?? [];
-        }
-
-        // 🔥 إذا ما في ولا شي، ارجع خطأ
         if (!$orderTotal) {
             return response()->json([
                 'success' => false,
-                'message' => 'No order total found. Please create an order first or provide order_total.'
+                'message' => 'Please provide order_total for this store.',
             ], 400);
         }
 
@@ -699,6 +712,13 @@ class UserController extends Controller
                 'success' => false,
                 'message' => 'Invalid coupon code.'
             ], 404);
+        }
+
+        if ($request->filled('seller_id') && (int) $coupon->seller_id !== (int) $request->seller_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This coupon does not belong to the selected store.',
+            ], 400);
         }
 
         // 🔥 تحقق: إذا الكوبون خاص بمنتجات وما في منتجات محددة

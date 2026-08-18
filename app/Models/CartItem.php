@@ -15,14 +15,18 @@ class CartItem extends Model
         'user_id' => 'integer',
         'qty' => 'integer',
     ];
-    // علاقة المنتج
-    public function product() {
+    public function product()
+    {
         return $this->belongsTo(Product::class);
     }
 
-  // علاقة التاجر
-    // public function seller() {
-    //     return $this->belongsTo(User::class, 'seller_id');
-    // }
-    
+    public function seller()
+    {
+        return $this->belongsTo(User::class, 'seller_id');
+    }
+
+    public function variant()
+    {
+        return $this->belongsTo(ProductVariant::class, 'variant_id');
+    }
 }

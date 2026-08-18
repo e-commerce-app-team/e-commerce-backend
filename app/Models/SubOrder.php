@@ -7,22 +7,41 @@ use Illuminate\Database\Eloquent\Model;
 class SubOrder extends Model
 {
     protected $fillable = [
-        'order_id',    // ربط بالطلب الرئيسي
-        'seller_id',   // التاجر الخاص بهذا الطلب الفرعي
-        'total'        // المبلغ المطلوب دفعه لهذا التاجر
+        'order_id',
+        'seller_id',
+        'total',
+        'shipping_method',
+        'shipping_label',
+        'shipping_cost',
+        'estimated_delivery',
+        'coupon_id',
+        'discount_amount',
+        'status',
     ];
 
-    // علاقة للعودة للطلب الرئيسي
+    protected $casts = [
+        'total'           => 'decimal:2',
+        'shipping_cost'   => 'decimal:2',
+        'discount_amount' => 'decimal:2',
+    ];
+
     public function order()
     {
         return $this->belongsTo(Order::class);
     }
-    public function Items()
-{
-    return $this->hasMany(OrderItem::class);
-}
-public function seller()
+
+    public function items()
     {
-        return $this->belongsTo(User::class, 'seller_id'); // أو Store::class حسب مشروعك
+        return $this->hasMany(OrderItem::class);
+    }
+
+    public function seller()
+    {
+        return $this->belongsTo(User::class, 'seller_id');
+    }
+
+    public function coupon()
+    {
+        return $this->belongsTo(Coupon::class);
     }
 }

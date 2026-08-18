@@ -19,6 +19,13 @@ class SubOrderResource extends JsonResource
                 ? (float) $this->total_price 
                 : (float) $this->items->sum(fn($i) => ($i->unit_price ?? $i->price) * $i->quantity),
             'items'       => OrderItemResource::collection($this->whenLoaded('items')),
+            'seller'      => $this->whenLoaded('seller', function () {
+                return [
+                    'id'         => $this->seller?->id,
+                    'store_name' => $this->seller?->store_name ?? $this->seller?->name,
+                    'store_logo' => $this->seller?->store_logo,
+                ];
+            }),
         ];
     }
 }

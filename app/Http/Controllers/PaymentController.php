@@ -6,6 +6,7 @@ use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\Transaction;
 use App\Services\InvoiceService;
+use App\Services\PushNotificationService;
 use App\Services\TaxService;
 use DB;
 use Hash;
@@ -197,7 +198,8 @@ class PaymentController extends Controller
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
-        $order = Order::where('id', $orderId)
+        $order = Order::with(['subOrders.seller'])
+            ->where('id', $orderId)
             ->where('user_id', $user->id)
             ->where('status', 'pending')
             ->where('payment_status', 'unpaid')
@@ -213,54 +215,67 @@ class PaymentController extends Controller
         }
 
         return DB::transaction(function () use ($user, $order) {
-            // 1. خصم الرصيد الكلي من المشتري
-            $user->decrement('balance', $order->total_price);
+            $totalAmount = (float) $order->total_price;
+            $user->decrement('balance', $totalAmount);
 
-            // 2. حساب العمولة ديناميكياً من PlatformSettings
-            $seller          = $order->seller;
-            $totalAmount     = $order->total_price;
-            $taxService      = app(TaxService::class);
-            $commissionResult = $taxService->calculateCommission($totalAmount, $seller->role);
-            $adminCommission = $commissionResult['commission'];
-            $sellerProfit    = $commissionResult['net'];
-            $commissionRate  = $commissionResult['rate'];
+            $taxService       = app(TaxService::class);
+            $adminCommission  = 0.0;
+            $commissionRate   = 0.0;
 
-            // 3. شحن رصيد البائع (محجوز برمجياً بانتظار الاستلام)
-            $seller->increment('balance', $sellerProfit);
+            foreach ($order->subOrders as $subOrder) {
+                $seller = $subOrder->seller;
+                if (!$seller) {
+                    continue;
+                }
 
-            // 4. تحديث حالة الدفع وتسجيل snapshot العمولة
+                $subTotal           = (float) $subOrder->total;
+                $commissionResult   = $taxService->calculateCommission($subTotal, $seller->role);
+                $sellerProfit       = $commissionResult['net'];
+                $adminCommission   += $commissionResult['commission'];
+                $commissionRate     = max($commissionRate, $commissionResult['rate']);
+
+                $seller->increment('balance', $sellerProfit);
+
+                Transaction::create([
+                    'user_id'     => $seller->id,
+                    'order_id'    => $order->id,
+                    'type'        => 'deposit',
+                    'amount'      => $sellerProfit,
+                    'description' => "Escrow earnings from SubOrder #{$subOrder->id} (Order #{$order->id})",
+                ]);
+            }
+
             $order->update([
-                'payment_status'            => 'paid_escrow',
-                'platform_commission'       => $adminCommission,
-                'commission_rate_snapshot'  => $commissionRate,
+                'payment_status'           => 'paid_escrow',
+                'platform_commission'      => round($adminCommission, 2),
+                'commission_rate_snapshot' => $commissionRate,
             ]);
 
-            // 5. تسجيل الحركات المالية في النظام
             Transaction::create([
                 'user_id'     => $user->id,
                 'order_id'    => $order->id,
                 'type'        => 'payment',
                 'amount'      => $totalAmount,
-                'description' => "Paid for Order #{$order->id} (Held in Escrow)"
+                'description' => "Paid for Order #{$order->id} (Held in Escrow)",
             ]);
 
-            Transaction::create([
-                'user_id'     => $seller->id,
-                'order_id'    => $order->id,
-                'type'        => 'deposit',
-                'amount'      => $sellerProfit,
-                'description' => "Escrow earnings from Order #{$order->id} (commission {$commissionRate}%)"
-            ]);
+            app(PushNotificationService::class)->sendToUser(
+                $user->fresh(),
+                'Order Confirmed',
+                "Your order #{$order->id} was paid successfully.",
+                ['type' => 'order_confirmed', 'order_id' => (string) $order->id]
+            );
 
             return response()->json([
-                'success'          => true,
-                'message'          => 'Payment successful. Funds locked in escrow until shipping and delivery confirmation.',
-                'new_balance'      => $user->balance,
-                'order_status'     => 'pending',
-                'payment_status'   => 'paid_escrow',
-                'commission_rate'  => $commissionRate,
-                'platform_commission' => $adminCommission,
-                'seller_net'       => $sellerProfit,
+                'success'             => true,
+                'message'             => 'Payment successful. Funds locked in escrow until delivery confirmation.',
+                'new_balance'         => $user->fresh()->balance,
+                'order_id'            => $order->id,
+                'order_number'        => '#' . str_pad((string) $order->id, 6, '0', STR_PAD_LEFT),
+                'order_status'        => 'pending',
+                'payment_status'      => 'paid_escrow',
+                'commission_rate'     => $commissionRate,
+                'platform_commission' => round($adminCommission, 2),
             ], 200);
         });
     }
