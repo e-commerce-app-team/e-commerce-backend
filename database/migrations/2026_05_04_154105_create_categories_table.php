@@ -15,6 +15,11 @@ return new class extends Migration {
             $table->foreignId('parent_id')->nullable()->constrained('categories')->onDelete('cascade');
             $table->string('name');
             $table->string('slug')->unique();
+
+            // 🔥🔥🔥 أعمدة الضريبة (الجديدة) 🔥🔥🔥
+            $table->decimal('tax_rate', 5, 2)->default(0);    // نسبة الضريبة
+            $table->string('tax_label')->nullable();// تسمية الضريبة
+
             $table->string('image_url')->nullable();
             $table->string('icon_url')->nullable();
             $table->integer('order_position')->default(0); // الترتيب للسحب والإفلات

@@ -507,7 +507,7 @@ class ProductController extends Controller
     // تابع جلب بيانات منتج معين حسب ال id  اي بشكل عام بيانات المنتج التفصيلية ولاي متجر تابع 
     public function showProductDetails($id)
     {
-        $product = \App\Models\Product::with([
+        $product = Product::with([
             'variants',
             'seller:id,store_name,store_logo,store_description'
         ])->find($id);
@@ -517,7 +517,7 @@ class ProductController extends Controller
         }
 
         // جلب منتجات مشابهة (مثلاً في نفس القسم أو نفس المتجر)
-        $similarProducts = \App\Models\Product::where('department_id', $product->department_id)
+        $similarProducts = Product::where('department_id', $product->department_id)
             ->where('id', '!=', $id)
             ->limit(4)
             ->get();
@@ -537,7 +537,7 @@ class ProductController extends Controller
 
     public function incrementViews($id)
     {
-        $product = \App\Models\Product::find($id);
+        $product = Product::find($id);
 
         if (!$product) {
             return response()->json(['success' => false, 'message' => 'المنتج غير موجود'], 404);

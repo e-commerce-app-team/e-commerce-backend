@@ -60,16 +60,16 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at'   => 'datetime',
-            'phone_verified_at'   => 'datetime',
-            'otp_expires_at'      => 'datetime',
-            'password'            => 'hashed',
-            'wallet_pin'          => 'hashed',
-            'balance'             => 'decimal:2',
-            'working_hours'       => 'array',
-            'social_links'        => 'array',
-            'permissions'         => 'array',
-            'two_factor_enabled'  => 'boolean',
+            'email_verified_at' => 'datetime',
+            'phone_verified_at' => 'datetime',
+            'otp_expires_at' => 'datetime',
+            'password' => 'hashed',
+            'wallet_pin' => 'hashed',
+            'balance' => 'decimal:2',
+            'working_hours' => 'array',
+            'social_links' => 'array',
+            'permissions' => 'array',
+            'two_factor_enabled' => 'boolean',
         ];
     }
 
@@ -147,6 +147,21 @@ class User extends Authenticatable
         return $this->hasMany(Product::class, 'user_id');
     }
 
+    /**
+     * الطلبات التي قام بها المستخدم كمشتري
+     */
+    public function orders()
+    {
+        return $this->hasMany(Order::class, 'user_id');
+    }
+
+    /**
+     * الطلبات التي قام بها المستخدم كبائع
+     */
+    public function sellerOrders()
+    {
+        return $this->hasMany(Order::class, 'seller_id');
+    }
     // ============================================================
     // 🔥 علاقات الموظفين (Staff Management)
     // ============================================================
@@ -256,7 +271,8 @@ class User extends Authenticatable
         return $this->belongsTo(User::class);
     }
 
-    public function cartItems() {
-    return $this->hasMany(CartItem::class); // المشتري يملك عناصر في السلة
-}
+    public function cartItems()
+    {
+        return $this->hasMany(CartItem::class); // المشتري يملك عناصر في السلة
+    }
 }

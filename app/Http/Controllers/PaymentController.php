@@ -216,55 +216,57 @@ class PaymentController extends Controller
             // 1. خصم الرصيد الكلي من المشتري
             $user->decrement('balance', $order->total_price);
 
-            // 2. حساب العمولة ديناميكياً من PlatformSettings
-            $seller          = $order->seller;
-            $totalAmount     = $order->total_price;
-            $taxService      = app(TaxService::class);
-            $commissionResult = $taxService->calculateCommission($totalAmount, $seller->role);
+            // 🔥 2. حساب العمولة من platform_settings (بدون orderId)
+            $seller = $order->seller;
+            $totalAmount = $order->total_price;
+            $taxService = app(TaxService::class);
+
+            // 🔥 لا نمرر orderId
+            // ✅✅✅ تمرير $order->id كمعامل ثالث ✅✅✅
+            $commissionResult = $taxService->calculateCommission($totalAmount, $seller->role, $order->id);
             $adminCommission = $commissionResult['commission'];
-            $sellerProfit    = $commissionResult['net'];
-            $commissionRate  = $commissionResult['rate'];
+            $sellerProfit = $commissionResult['net'];
+            $commissionRate = $commissionResult['rate'];
 
             // 3. شحن رصيد البائع (محجوز برمجياً بانتظار الاستلام)
             $seller->increment('balance', $sellerProfit);
 
             // 4. تحديث حالة الدفع وتسجيل snapshot العمولة
             $order->update([
-                'payment_status'            => 'paid_escrow',
-                'platform_commission'       => $adminCommission,
-                'commission_rate_snapshot'  => $commissionRate,
+                'payment_status' => 'paid_escrow',
+                'platform_commission' => $adminCommission,
+                'commission_rate_snapshot' => $commissionRate,
             ]);
 
             // 5. تسجيل الحركات المالية في النظام
             Transaction::create([
-                'user_id'     => $user->id,
-                'order_id'    => $order->id,
-                'type'        => 'payment',
-                'amount'      => $totalAmount,
+                'user_id' => $user->id,
+                'order_id' => $order->id,
+                'type' => 'payment',
+                'amount' => $totalAmount,
                 'description' => "Paid for Order #{$order->id} (Held in Escrow)"
             ]);
 
             Transaction::create([
-                'user_id'     => $seller->id,
-                'order_id'    => $order->id,
-                'type'        => 'deposit',
-                'amount'      => $sellerProfit,
+                'user_id' => $seller->id,
+                'order_id' => $order->id,
+                'type' => 'deposit',
+                'amount' => $sellerProfit,
                 'description' => "Escrow earnings from Order #{$order->id} (commission {$commissionRate}%)"
             ]);
 
             return response()->json([
-                'success'          => true,
-                'message'          => 'Payment successful. Funds locked in escrow until shipping and delivery confirmation.',
-                'new_balance'      => $user->balance,
-                'order_status'     => 'pending',
-                'payment_status'   => 'paid_escrow',
-                'commission_rate'  => $commissionRate,
+                'success' => true,
+                'message' => 'Payment successful. Funds locked in escrow until shipping and delivery confirmation.',
+                'new_balance' => $user->balance,
+                'order_status' => 'pending',
+                'payment_status' => 'paid_escrow',
+                'commission_rate' => $commissionRate,
                 'platform_commission' => $adminCommission,
-                'seller_net'       => $sellerProfit,
+                'seller_net' => $sellerProfit,
             ], 200);
         });
     }
-
     // 4. عرض سجل العمليات (كشف الحساب) للمشتري
     public function getTransactionHistory()
     {
@@ -307,15 +309,15 @@ class PaymentController extends Controller
             $timeline = $order->status_timeline ?? [];
             $timeline[] = [
                 'status' => 'delivered',
-                'title'  => 'Buyer confirmed delivery. Funds unlocked successfully.',
-                'time'   => now()->toDateTimeString()
+                'title' => 'Buyer confirmed delivery. Funds unlocked successfully.',
+                'time' => now()->toDateTimeString()
             ];
 
             // تحويل حالة الطلب إلى delivered والدفع إلى مكتمل تماماً
             $order->update([
-                'status'          => 'delivered',
-                'payment_status'  => 'released',
-                'delivered_at'    => now(),
+                'status' => 'delivered',
+                'payment_status' => 'released',
+                'delivered_at' => now(),
                 'status_timeline' => $timeline
             ]);
 
