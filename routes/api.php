@@ -402,3 +402,5 @@ Route::get('/home/trending', [ProductController::class, 'getTrendingProducts']);
 Route::get('/home/flash-sales', [ProductController::class, 'getFlashSales']);
 //مسار ارجاع المتاجر القريبة مني 
 Route::get('/stores/nearby', [StoreController::class, 'getNearbyStores']);
+//مسار تابع منتجات قد تعجبك /مقترحة لي 
+Route::get('/home/recommended', [ProductController::class, 'getRecommendedProducts']);
