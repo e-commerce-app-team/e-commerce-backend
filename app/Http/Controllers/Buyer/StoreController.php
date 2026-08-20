@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Buyer;
 use App\Http\Controllers\Controller;
 use App\Models\Department;
 use App\Models\StoreReview;
+use App\Models\Product;  // استيراد الـ Model
 
+use App\Models\User;
 use Illuminate\Http\Request;
 
 class StoreController extends Controller
 {
-    private function storageUrl(?string $path): ?string
+    private function storageUrl(?string $path, $id): ?string
     {
         // 1. جلب المتجر مع حساب عدد المنتجات ومتوسط التقييمات ديناميكياً
         $store = User::whereIn('role', ['vendor', 'wholesale'])
@@ -25,41 +27,110 @@ class StoreController extends Controller
             ], 404);
         }
 
-        $isOpen = isset($store->is_open) ? (bool)$store->is_open : true;
+        $isOpen = isset($store->is_open) ? (bool) $store->is_open : true;
 
         return response()->json([
             'success' => true,
             'data' => [
-                'id'             => $store->id,
-                'store_name'     => $store->store_name,
-                'store_logo'     => $store->store_logo ? asset('storage/' . $store->store_logo) : null,
-                'store_cover'    => $store->store_cover ? asset('storage/' . $store->store_cover) : null,
+                'id' => $store->id,
+                'store_name' => $store->store_name,
+                'store_logo' => $store->store_logo ? asset('storage/' . $store->store_logo) : null,
+                'store_cover' => $store->store_cover ? asset('storage/' . $store->store_cover) : null,
 
                 // تقريب متوسط التقييم لمنزلتين عشرتَين (أو إرجاع 0.0 إذا لم يُقيّم بعد)
-                'rating'         => round($store->rating ?? 0, 2),
+                'rating' => round($store->rating ?? 0, 2),
 
                 'products_count' => $store->products_count,
-                'is_open'        => $isOpen
+                'is_open' => $isOpen
+            ]
+        ], 200);
+    }
+
+    public function show($id)
+    {
+        // 1. البحث عن المتجر والتأكد من أنه متجر فعلي
+        $store = User::where('id', $id)
+            ->where(function ($q) {
+                $q->whereIn('role', ['vendor', 'wholesale', 'seller'])
+                    ->orWhereNotNull('store_name');
+            })
+            ->select('id', 'store_name', 'store_logo', 'store_description', 'category')
+            ->first();
+
+        if (!$store) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Store not found'
+            ], 404);
+        }
+
+        // 2. جلب المنتجات التابعة لهذا المتجر فقط مع الترقيم
+        $products = Product::where('user_id', $store->id)
+            ->with(['department:id,name'])
+            ->latest()
+            ->paginate(12);
+
+        // 3. معالجة وتنسيق المنتجات (فك الترجمة إذا كانت مخزنة كـ JSON)
+        $products->getCollection()->transform(function ($product) {
+            $productName = $product->name;
+            if (is_string($productName)) {
+                $decoded = json_decode($productName, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    $locale = app()->getLocale();
+                    $productName = $decoded[$locale] ?? $decoded['ar'] ?? $decoded['en'] ?? reset($decoded);
+                }
+            }
+
+            $price = $product->offer_price ?? $product->original_price ?? $product->price;
+
+            return [
+                'id' => $product->id,
+                'name' => $productName,
+                'image' => $product->image,
+                'price' => round((float) $price, 2),
+                'original_price' => $product->original_price ? round((float) $product->original_price, 2) : null,
+                'has_offer' => !empty($product->offer_price),
+                'department' => $product->department ? $product->department->name : null,
+            ];
+        });
+
+        // 4. جلب الأقسام التي يمتلك المتجر منتجات فيها (للفلترة في الفرونت)
+        $departments = Product::where('user_id', $store->id)
+            ->whereNotNull('department_id')
+            ->with('department:id,name')
+            ->get()
+            ->pluck('department')
+            ->unique('id')
+            ->values();
+
+        // 5. إرجاع الاستجابة النهائية
+        return response()->json([
+            'success' => true,
+            'message' => 'Store details retrieved successfully',
+            'data' => [
+                'store' => $store,
+                'departments' => $departments,
+                'products' => $products,
             ]
         ], 200);
     }
     //جلب اقسام متجر محدد
-    public function getStoreTree($store_id)
+    public function getStoreTree(Request $request, $store_id)
     {
-        // جلب الأقسام الرئيسية الخاصة بالمتجر (المربوطة بـ seller_id والتي parent_id لها null)
-        $categories = Department::where('seller_id', $store_id) // 🌟 تم الاعتماد على seller_id
+        // جلب الأقسام الرئيسية الخاصة بالمتجر مع أقسامها الفرعية
+        $categories = Department::where('seller_id', $store_id)
             ->whereNull('parent_id')
-            ->with(['children' => function ($query) use ($store_id) {
-                // نضمن برمجياً أن الأقسام الفرعية تتبع لنفس المتجر أيضاً
-                $query->where('seller_id', $store_id)
-                    ->select('id', 'name', 'slug', 'parent_id', 'seller_id');
-            }])
+            ->with([
+                'children' => function ($query) use ($store_id) {
+                    $query->where('seller_id', $store_id)
+                        ->select('id', 'name', 'slug', 'parent_id', 'seller_id');
+                }
+            ])
             ->withCount('products')
             ->orderBy('order_position')
             ->orderBy('name')
             ->get();
 
-        // التحقق إذا كان المتجر لا يملك أقساماً بعد
         if ($categories->isEmpty()) {
             return response()->json([
                 'success' => true,
@@ -68,112 +139,116 @@ class StoreController extends Controller
             ], 200);
         }
 
-        if ($request->filled('q')) {
-            $q = trim($request->q);
-            $query->where(function ($subQuery) use ($q) {
-                $subQuery->where('name', 'like', "%{$q}%")
-                    ->orWhere('sku', 'like', "%{$q}%")
-                    ->orWhere('description', 'like', "%{$q}%");
-            });
-        }
-
-        if ($request->filled('min_price')) {
-            $query->where(function ($subQuery) use ($request) {
-                $subQuery->where('offer_price', '>=', $request->min_price)
-                    ->orWhere(function ($nested) use ($request) {
-                        $nested->whereNull('offer_price')
-                            ->where('original_price', '>=', $request->min_price);
-                    });
-            });
-        }
-
-        if ($request->filled('max_price')) {
-            $query->where(function ($subQuery) use ($request) {
-                $subQuery->where('offer_price', '<=', $request->max_price)
-                    ->orWhere(function ($nested) use ($request) {
-                        $nested->whereNull('offer_price')
-                            ->where('original_price', '<=', $request->max_price);
-                    });
-            });
-        }
-
-        match ($request->get('sort_by', 'latest')) {
-            'oldest' => $query->orderBy('created_at'),
-            'price_asc' => $query->orderByRaw('COALESCE(offer_price, original_price) ASC'),
-            'price_desc' => $query->orderByRaw('COALESCE(offer_price, original_price) DESC'),
-            'best_selling' => $query->orderByDesc('sales_count'),
-            'rating' => $query->orderByDesc('rating'),
-            default => $query->orderByDesc('created_at'),
-        };
-
-        $paginated = $query->paginate((int) $request->get('per_page', 12));
-
         return response()->json([
             'success' => true,
-            'data' => [
-                'data' => collect($paginated->items())
-                    ->map(fn (Product $product) => $this->formatProduct($product, $buyerId))
-                    ->values(),
-                'current_page' => $paginated->currentPage(),
-                'last_page' => $paginated->lastPage(),
-                'total' => $paginated->total(),
-            ],
-        ]);
+            'message' => 'Store departments tree retrieved successfully',
+            'data' => $categories
+        ], 200);
     }
 
+    //تنسيق بيانات المنتج وتطبيق الترجمة وفحص المفضلة
+    private function formatProduct($product, $buyerId = null)
+    {
+        // 1. معالجة اسم المنتج وتفكيك الـ JSON للغة الحالية
+        $productName = $product->name;
+        if (is_string($productName)) {
+            $decoded = json_decode($productName, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                $locale = app()->getLocale();
+                $productName = $decoded[$locale] ?? $decoded['ar'] ?? $decoded['en'] ?? reset($decoded);
+            }
+        }
 
-    //جلب منتجات متجر محدد
+        // 2. حساب السعر المطلوب (عرض أو سعر أصلي)
+        $price = $product->offer_price ?? $product->original_price ?? $product->price;
+
+        return [
+            'id' => $product->id,
+            'name' => $productName,
+            'image' => $product->image,
+            'price' => round((float) $price, 2),
+            'original_price' => $product->original_price ? round((float) $product->original_price, 2) : null,
+            'has_offer' => !empty($product->offer_price),
+            'category_id' => $product->department_id ?? null,
+        ];
+    }
+    // جلب منتجات متجر محدد
     public function getStoreProducts($store_id)
     {
-        $products = \App\Models\Product::where('user_id', $store_id)
-            //  ->select('id', 'name', 'price', 'image', 'description', 'seller_id', 'department_id')
+        // 1. استخدام اسم المتغير $paginated ليتطابق مع بقية الكود
+        $paginated = Product::where('user_id', $store_id)
+            ->latest()
             ->paginate(12);
+
+        // 2. تعيين $buyerId في حال كانت الدالة formatProduct تتطلبه (مثلاً للتحقق من المفضلة)
+        $buyerId = auth('sanctum')->id();
 
         return response()->json([
             'success' => true,
             'data' => [
                 'data' => collect($paginated->items())
-                    ->map(fn (Product $product) => $this->formatProduct($product, $buyerId))
+                    ->map(fn(Product $product) => $this->formatProduct($product, $buyerId))
                     ->values(),
                 'current_page' => $paginated->currentPage(),
                 'last_page' => $paginated->lastPage(),
                 'total' => $paginated->total(),
             ],
-        ]);
+        ], 200);
     }
 
     //جلب منتجات قسم محدد (مع منتجات الأقسام الفرعية التابعة له)
+// جلب منتجات قسم محدد (مع منتجات الأقسام الفرعية التابعة له)
     public function getdepartmentProducts($category_id)
     {
-        // 1. جلب IDs القسم المحدد وأي أقسام فرعية تابعة له
-        $categoryIds = \App\Models\Department::where('id', $category_id)
+        // 1. جلب IDs القسم المحدد وأي أقسام فرعية تابعة له مباشرة
+        $categoryIds = Department::where('id', $category_id)
             ->orWhere('parent_id', $category_id)
             ->pluck('id');
 
-        // 2. جلب المنتجات الموجودة في هذه الأقسام
-        $products = \App\Models\Product::whereIn('department_id', $categoryIds)
-            // ->select('id', 'name', 'price', 'image', 'description', 'department_id')
+        // 2. جلب المنتجات الموجودة في هذه الأقسام مع ترقيم الصفحات
+        $paginated = Product::whereIn('department_id', $categoryIds)
+            ->latest()
             ->paginate(12);
 
+        // 3. تنسيق بيانات المنتجات وفك ترجمة الأسماء
+        $formattedProducts = collect($paginated->items())->map(function ($product) {
+            $productName = $product->name;
+            if (is_string($productName)) {
+                $decoded = json_decode($productName, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    $locale = app()->getLocale();
+                    $productName = $decoded[$locale] ?? $decoded['ar'] ?? $decoded['en'] ?? reset($decoded);
+                }
+            }
+
+            $price = $product->offer_price ?? $product->original_price ?? $product->price;
+
+            return [
+                'id' => $product->id,
+                'name' => $productName,
+                'image' => $product->image,
+                'price' => round((float) $price, 2),
+                'original_price' => $product->original_price ? round((float) $product->original_price, 2) : null,
+                'has_offer' => !empty($product->offer_price),
+                'department_id' => $product->department_id,
+            ];
+        })->values();
+
+        // 4. إرجاع الاستجابة المنسقة
         return response()->json([
             'success' => true,
+            'message' => 'Department products retrieved successfully',
             'data' => [
-                'data' => collect($reviews->items())->map(fn (StoreReview $review) => [
-                    'id' => $review->id,
-                    'buyer_name' => trim(($review->buyer?->first_name ?? '') . ' ' . ($review->buyer?->last_name ?? '')),
-                    'rating' => (float) $review->rating,
-                    'comment' => $review->comment,
-                    'created_at' => $review->created_at,
-                ])->values(),
-                'current_page' => $reviews->currentPage(),
-                'last_page' => $reviews->lastPage(),
-                'total' => $reviews->total(),
+                'data' => $formattedProducts,
+                'current_page' => $paginated->currentPage(),
+                'last_page' => $paginated->lastPage(),
+                'total' => $paginated->total(),
             ],
-        ]);
+        ], 200);
     }
 
     // جلب التقييمات الخاصة بمتجر معين
-    public function getStoreReviews($store_id)
+       public function getStoreReviews($store_id)
     {
         // 1. جلب التقييمات مع الحقول المحددة من جدول الـ Users
         $reviews = StoreReview::where('store_id', $store_id)
@@ -192,44 +267,7 @@ class StoreController extends Controller
                     'total_reviews'  => 0,
                 ]
             ], 200);
-        }
-
-        // 3. حساب متوسط التقييمات
-        $avgRating = StoreReview::where('store_id', $store_id)->avg('rating');
-
-        // 4. إرجاع البيانات بفرز وتنسيق اسم المشتري وصورته
-        return response()->json([
-            'success' => true,
-            'stats'   => [
-                'average_rating' => round($avgRating, 2),
-                'total_reviews'  => $reviews->total(),
-            ],
-            'data' => $reviews->through(function ($review) {
-                // دمج الاسم الأول والأخير
-                $fullName = trim(($review->user->first_name ?? '') . ' ' . ($review->user->last_name ?? ''));
-
-                return [
-                    'id'         => $review->id,
-                    'rating'     => $review->rating,
-                    'comment'    => $review->comment,
-                    'created_at' => $review->created_at->format('Y-m-d H:i'),
-                    'user'       => [
-                        'id'    => $review->user->id ?? null,
-                        'name'  => !empty($fullName) ? $fullName : 'مشتري',
-                        'profile_photo' => isset($review->user->profile_photo)
-                            ? asset('storage/' . $review->user->profile_photo)
-                            : null,
-                    ]
-                ];
-            })->items(),
-            'pagination' => [
-                'total'        => $reviews->total(),
-                'per_page'     => $reviews->perPage(),
-                'current_page' => $reviews->currentPage(),
-                'last_page'    => $reviews->lastPage(),
-            ]
-        ], 200);
-    }
+        }}
 
     // تابع لخريطة المتجر 
     public function getStoresMap(Request $request)
@@ -238,7 +276,7 @@ class StoreController extends Controller
         $lng = $request->lng;
         $radius = $request->radius ?? 10;
 
-        $stores = \App\Models\User::query()
+        $stores = User::query()
             ->whereIn('role', ['vendor', 'wholesale'])
             ->select(
                 'id',
@@ -269,9 +307,11 @@ class StoreController extends Controller
         $stores = User::whereIn('role', ['vendor', 'wholesale'])
             ->where('status', 'approved')
             ->withAvg('storeReviews', 'rating')
-            ->withExists(['ads as has_paid_ad' => function ($query) {
-                $query->where('status', 'active');
-            }])
+            ->withExists([
+                'ads as has_paid_ad' => function ($query) {
+                    $query->where('status', 'active');
+                }
+            ])
             ->get()
             // التصفية والفلترة بالذاكرة لضمان عدم حدوث تعارض SQL
             ->filter(function ($store) {
@@ -293,39 +333,39 @@ class StoreController extends Controller
                     : 0.0;
 
                 return [
-                    'id'       => $store->id,
-                    'logo'     => $store->store_logo ? asset('storage/' . $store->store_logo) : null,
-                    'name'     => $store->store_name ?? ($store->first_name . ' ' . $store->last_name),
+                    'id' => $store->id,
+                    'logo' => $store->store_logo ? asset('storage/' . $store->store_logo) : null,
+                    'name' => $store->store_name ?? ($store->first_name . ' ' . $store->last_name),
                     'category' => $store->category ?? 'General',
-                    'rating'   => $rating,
+                    'rating' => $rating,
                     'has_paid_ad' => (bool) $store->has_paid_ad,
-                    'is_open'  => true,
+                    'is_open' => true,
                 ];
             });
 
         return response()->json([
-            'status'  => true,
+            'status' => true,
             'message' => 'Featured stores retrieved successfully',
-            'data'    => $stores
+            'data' => $stores
         ], 200);
     }
-//تابع المتاجر القريبة مني
-public function getNearbyStores(Request $request)
-{
-    // 1. التحقق من المدخلات المطلوبة
-    $request->validate([
-        'lat'    => 'required|numeric|between:-90,90',
-        'lng'    => 'required|numeric|between:-180,180',
-        'radius' => 'nullable|numeric|min:0.1', // النطاق بالكيلومتر (الافتراضي 10)
-    ]);
+    //تابع المتاجر القريبة مني
+    public function getNearbyStores(Request $request)
+    {
+        // 1. التحقق من المدخلات المطلوبة
+        $request->validate([
+            'lat' => 'required|numeric|between:-90,90',
+            'lng' => 'required|numeric|between:-180,180',
+            'radius' => 'nullable|numeric|min:0.1', // النطاق بالكيلومتر (الافتراضي 10)
+        ]);
 
-    $userLat = $request->input('lat');
-    $userLng = $request->input('lng');
-    $radius  = $request->input('radius', 10);
-    $limit   = $request->input('limit', 10);
+        $userLat = $request->input('lat');
+        $userLng = $request->input('lng');
+        $radius = $request->input('radius', 10);
+        $limit = $request->input('limit', 10);
 
-    // 2. معادلة Haversine لحساب المسافة بالـ KM
-    $haversine = "(6371 * acos(
+        // 2. معادلة Haversine لحساب المسافة بالـ KM
+        $haversine = "(6371 * acos(
         cos(radians(?)) 
         * cos(radians(latitude)) 
         * cos(radians(longitude) - radians(?)) 
@@ -333,39 +373,39 @@ public function getNearbyStores(Request $request)
         * sin(radians(latitude))
     ))";
 
-    // 3. الاستعلام عن التجار المعتمدين (approved)
-    $stores = User::select('users.*')
-        ->selectRaw("{$haversine} AS distance_km", [$userLat, $userLng, $userLat])
-        ->whereIn('role', ['vendor', 'wholesale'])
-        ->where('status', 'approved') // تم التحديث إلى approved
-        ->whereNotNull('latitude')
-        ->whereNotNull('longitude')
-        ->having('distance_km', '<=', $radius)
-        ->orderBy('distance_km', 'asc')
-        ->limit($limit)
-        ->get();
+        // 3. الاستعلام عن التجار المعتمدين (approved)
+        $stores = User::select('users.*')
+            ->selectRaw("{$haversine} AS distance_km", [$userLat, $userLng, $userLat])
+            ->whereIn('role', ['vendor', 'wholesale'])
+            ->where('status', 'approved') // تم التحديث إلى approved
+            ->whereNotNull('latitude')
+            ->whereNotNull('longitude')
+            ->having('distance_km', '<=', $radius)
+            ->orderBy('distance_km', 'asc')
+            ->limit($limit)
+            ->get();
 
-    // 4. تنسيق الاستجابة
-    return response()->json([
-        'success' => true,
-        'data'    => $stores->map(function ($store) {
-            $logo = $store->store_logo 
-                ? (str_starts_with($store->store_logo, 'http') ? $store->store_logo : asset('storage/' . $store->store_logo))
-                : null;
+        // 4. تنسيق الاستجابة
+        return response()->json([
+            'success' => true,
+            'data' => $stores->map(function ($store) {
+                $logo = $store->store_logo
+                    ? (str_starts_with($store->store_logo, 'http') ? $store->store_logo : asset('storage/' . $store->store_logo))
+                    : null;
 
-            return [
-                'id'                => $store->id,
-                'store_name'        => $store->store_name ?? ($store->first_name . ' ' . $store->last_name),
-                'store_description' => $store->store_description,
-                'store_logo'        => $logo,
-                'category'          => $store->category,
-                'latitude'          => (float) $store->latitude,
-                'longitude'         => (float) $store->longitude,
-                'detailed_address'  => $store->detailed_address,
-                'distance_km'       => round((float) $store->distance_km, 2),
-            ];
-        })
-    ], 200);
-}
+                return [
+                    'id' => $store->id,
+                    'store_name' => $store->store_name ?? ($store->first_name . ' ' . $store->last_name),
+                    'store_description' => $store->store_description,
+                    'store_logo' => $logo,
+                    'category' => $store->category,
+                    'latitude' => (float) $store->latitude,
+                    'longitude' => (float) $store->longitude,
+                    'detailed_address' => $store->detailed_address,
+                    'distance_km' => round((float) $store->distance_km, 2),
+                ];
+            })
+        ], 200);
+    }
 
 }

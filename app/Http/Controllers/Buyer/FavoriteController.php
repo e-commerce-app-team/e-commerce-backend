@@ -6,13 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Favorite;
 use App\Models\CartItem;
 use Illuminate\Http\Request;
+use App\Models\Product;        // ✅ أضف هالسطر
 
 class FavoriteController extends Controller
 {
     public function add(Request $request)
     {
         // 1. جلب المنتج أولاً لمعرفة التصنيف (category_id)
-        $product = \App\Models\Product::find($request->product_id);
+        $product = Product::find($request->product_id);
 
         if (!$product) {
             return response()->json(['message' => 'Product not found'], 404);
@@ -27,9 +28,9 @@ class FavoriteController extends Controller
         try {
             if (auth()->check()) {
                 \App\Models\UserBehavior::create([
-                    'user_id'     => auth()->id(),
-                    'action'      => 'cart', // نستخدم cart لكونها تعكس اهتماماً عالياً بالمنتج
-                    'product_id'  => $product->id,
+                    'user_id' => auth()->id(),
+                    'action' => 'cart', // نستخدم cart لكونها تعكس اهتماماً عالياً بالمنتج
+                    'product_id' => $product->id,
                     'category_id' => $product->department_id,
                 ]);
             }
@@ -93,7 +94,7 @@ class FavoriteController extends Controller
         ]);
 
         // 2. جلب معلومات المنتج لجلب الـ seller_id لاحقاً
-        $product = \App\Models\Product::find($request->product_id);
+        $product = Product::find($request->product_id);
 
         // 3. التحقق من وجود المنتج في مفضلة المستخدم الحالي
         $favorite = Favorite::where('user_id', auth()->id())
@@ -108,10 +109,10 @@ class FavoriteController extends Controller
 
         // 4. إضافة المنتج للسلة مع الـ seller_id
         CartItem::create([
-            'user_id'    => auth()->id(),
+            'user_id' => auth()->id(),
             'product_id' => $request->product_id,
-            'seller_id'  => $product->user_id, // تم جلبها من بيانات المنتج الأساسية
-            'qty'        => 1
+            'seller_id' => $product->user_id, // تم جلبها من بيانات المنتج الأساسية
+            'qty' => 1
         ]);
 
         // 5. حذف المنتج من المفضلة بعد نقله للسلة

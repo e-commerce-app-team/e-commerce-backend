@@ -11,9 +11,12 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('products', function (Blueprint $table) {
-            $table->unsignedBigInteger('views')->default(0)->after('status');
-        });
+        // ✅ تحقق من وجود العمود قبل إضافته
+        if (!Schema::hasColumn('products', 'views')) {
+            Schema::table('products', function (Blueprint $table) {
+                $table->unsignedBigInteger('views')->default(0)->after('status');
+            });
+        }
     }
 
     /**
@@ -21,8 +24,11 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('products', function (Blueprint $table) {
-        $table->dropColumn('views');
-    });
+        // ✅ تحقق من وجود العمود قبل حذفه
+        if (Schema::hasColumn('products', 'views')) {
+            Schema::table('products', function (Blueprint $table) {
+                $table->dropColumn('views');
+            });
+        }
     }
 };

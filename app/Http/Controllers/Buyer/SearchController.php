@@ -2,20 +2,21 @@
 namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
-use App\Models\Product; 
-use App\Models\User; 
+use App\Models\Product;
+use App\Models\User;
 use App\Models\Department;
 use Illuminate\Http\Request;
 
 class SearchController extends Controller
 {
-    
-     // البحث الشامل والذكي (منتجات ومتاجر وأقسام)
-     
+
+    // البحث الشامل والذكي (منتجات ومتاجر وأقسام)
+
+    // البحث الشامل والذكي (منتجات ومتاجر وأقسام)
+
     public function search(Request $request)
     {
-        $queryText = $request->get('q'); 
-
+        $queryText = $request->input('q');
         if (empty($queryText)) {
             return response()->json([
                 'success' => true,
@@ -38,11 +39,11 @@ class SearchController extends Controller
                 // أ) البحث في اسم المنتج ووصفه
                 $mainQuery->where('name', 'LIKE', "%{$word}%")
                     ->orWhere('description', 'LIKE', "%{$word}%")
-                    
+
                     // ب) البحث في القسم الفرعي المرتبط بالمنتج (Department)
                     ->orWhereHas('department', function ($subDeptQuery) use ($word) {
                         $subDeptQuery->where('name', 'LIKE', "%{$word}%")
-                            
+
                             // ج) الصعود درجة للبحث في القسم الرئيسي الأب (Parent Department)
                             ->orWhereHas('parent', function ($parentDeptQuery) use ($word) {
                                 $parentDeptQuery->where('name', 'LIKE', "%{$word}%");
@@ -53,9 +54,9 @@ class SearchController extends Controller
 
         // جلب المنتجات النهائية (تأكدي من مطابقة اسم حقل السعر عندك كـ product_price أو price)
         $products = $productsQuery
-        //select('id', 'name', 'product_price', 'image', 'user_id', 'department_id')
-                                  ->limit(20)
-                                  ->get();
+            //select('id', 'name', 'product_price', 'image', 'user_id', 'department_id')
+            ->limit(20)
+            ->get();
 
         // ==========================================
         // 🔥 ثانياً: بناء استعلام المتاجر الشامل
@@ -66,14 +67,14 @@ class SearchController extends Controller
             $storesQuery->where(function ($q) use ($word) {
                 // أ) البحث في اسم المتجر ووصفه وتخصصه الرئيسي
                 $q->where('store_name', 'LIKE', "%{$word}%")
-                  ->orWhere('store_description', 'LIKE', "%{$word}%")
-                  ->orWhere('category', 'LIKE', "%{$word}%"); 
+                    ->orWhere('store_description', 'LIKE', "%{$word}%")
+                    ->orWhere('category', 'LIKE', "%{$word}%");
             });
         }
 
         $stores = $storesQuery->select('id', 'store_name', 'store_logo', 'store_description', 'category')
-                              ->limit(20)
-                              ->get();
+            ->limit(20)
+            ->get();
 
         // 3. إرجاع النتيجة مجمعة ومنظمة للفرونت آيند
         return response()->json([
@@ -85,19 +86,17 @@ class SearchController extends Controller
         ], 200);
     }
 
-    
-     // الاقتراحات الفورية السريعة أثناء الكتابة
+    // الاقتراحات الفورية السريعة أثناء الكتابة
     public function suggestions(Request $request)
     {
-        $queryText = $request->get('q');
-
+        $queryText = $request->input('q');
         if (empty($queryText)) {
             return response()->json(['success' => true, 'data' => []]);
         }
 
         // جلب أول 5 أسماء منتجات
         $productSuggestions = Product::where('name', 'LIKE', "%{$queryText}%")
-            ->pluck('name') 
+            ->pluck('name')
             ->take(5)
             ->toArray();
 

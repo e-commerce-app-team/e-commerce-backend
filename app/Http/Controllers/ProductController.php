@@ -533,7 +533,7 @@ class ProductController extends Controller
         // 🎯 تسجيل سلوك المشاهدة (View) للمستخدم الحالي إذا كان مسجلاً لديه حساب
         try {
             if (auth('sanctum')->check()) {
-                \App\Models\UserBehavior::create([
+                UserBehavior::create([
                     'user_id'     => auth('sanctum')->id(),
                     'action'      => 'view',
                     'product_id'  => $product->id,

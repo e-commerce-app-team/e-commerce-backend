@@ -161,8 +161,8 @@ class OrderController extends Controller
 
                 // تجميع بيانات المنتجات لحساب الضريبة لاحقاً، بدون تضمين الضريبة في base_price
                 $validatedItems[] = [
-                    'product'    => $product,
-                    'quantity'   => $item['quantity'],
+                    'product' => $product,
+                    'quantity' => $item['quantity'],
                     'base_price' => (float) $basePrice,
                 ];
             }
@@ -170,7 +170,7 @@ class OrderController extends Controller
 
         // حساب الضريبة باستخدام TaxService (كل منتج بمعدله الخاص)
         $taxService = app(\App\Services\TaxService::class);
-        $taxResult  = $taxService->calculateOrderTax($validatedItems);
+        $taxResult = $taxService->calculateOrderTax($validatedItems);
 
         // تجميع معرفات المنتجات للكاش Cache
         foreach ($validatedItems as $vi) {
@@ -233,11 +233,11 @@ class OrderController extends Controller
 
                     CouponUsage::create([
                         'coupon_id' => $coupon->id,
-                        'user_id'   => $buyer->id,
-                        'order_id'  => null,
-                        'discount_amount'              => $discountAmount,
-                        'order_total_before_discount'  => $taxResult['total'],
-                        'order_total_after_discount'   => $taxResult['total'] - $discountAmount
+                        'user_id' => $buyer->id,
+                        'order_id' => null,
+                        'discount_amount' => $discountAmount,
+                        'order_total_before_discount' => $taxResult['total'],
+                        'order_total_after_discount' => $taxResult['total'] - $discountAmount
                     ]);
                 }
             } else {
@@ -249,26 +249,26 @@ class OrderController extends Controller
         }
 
         $order = Order::create([
-            'user_id'                  => $buyer->id,
-            'seller_id'                => $request->seller_id,
-            'total_price'              => round($taxResult['total'] - $discountAmount, 2),
-            'subtotal_before_tax'      => $taxResult['subtotal'],
-            'tax_amount'               => $taxResult['tax_amount'],
-            'tax_breakdown'            => $taxResult['breakdown'],
-            'status'                   => 'pending',
-            'payment_status'           => 'unpaid',
-            'payment_method'           => $request->input('payment_method', 'wallet'),
-            'shipping_address_title'   => $request->shipping_address_title,
+            'user_id' => $buyer->id,
+            'seller_id' => $request->seller_id,
+            'total_price' => round($taxResult['total'] - $discountAmount, 2),
+            'subtotal_before_tax' => $taxResult['subtotal'],
+            'tax_amount' => $taxResult['tax_amount'],
+            'tax_breakdown' => $taxResult['breakdown'],
+            'status' => 'pending',
+            'payment_status' => 'unpaid',
+            'payment_method' => $request->input('payment_method', 'wallet'),
+            'shipping_address_title' => $request->shipping_address_title,
             'shipping_address_details' => $request->shipping_address_details,
-            'customer_notes'           => $request->customer_notes,
-            'coupon_id'                => $couponId,
-            'discount_amount'          => round($discountAmount, 2),
+            'customer_notes' => $request->customer_notes,
+            'coupon_id' => $couponId,
+            'discount_amount' => round($discountAmount, 2),
             'commission_rate_snapshot' => 0, // تُحدد وقت الدفع
-            'status_timeline'          => [
+            'status_timeline' => [
                 [
                     'status' => 'pending',
-                    'title'  => 'تم استلام الطلب بنجاح وهو قيد الانتظار وبانتظار الدفع',
-                    'time'   => now()->toDateTimeString()
+                    'title' => 'تم استلام الطلب بنجاح وهو قيد الانتظار وبانتظار الدفع',
+                    'time' => now()->toDateTimeString()
                 ]
             ]
         ]);
@@ -281,19 +281,19 @@ class OrderController extends Controller
                 ->first()
                     ?->update(['order_id' => $order->id]);
         }
-$syncData = [];
+        $syncData = [];
 
         // 1. إنشاء الطلب الفرعي الآمن للطلب
         $subOrder = $order->subOrders()->create([
-            'seller_id'   => $request->seller_id,
-            'status'      => 'pending',
-            'total_price' => round($finalPrice, 2),
+            'seller_id' => $request->seller_id,
+            'status' => 'pending',
+            'total' => round($finalPrice, 2),  // ✅ استخدم total بدلاً من total_price
         ]);
 
         foreach ($validatedItems as $validatedItem) {
-            $product   = $validatedItem['product'];
-            $qty       = $validatedItem['quantity'];
-            
+            $product = $validatedItem['product'];
+            $qty = $validatedItem['quantity'];
+
             // حساب سعر الوحدة شاملاً الضريبة
             $unitPrice = round(
                 $validatedItem['base_price'] * (1 + $product->effectiveTaxRate() / 100),
@@ -304,14 +304,14 @@ $syncData = [];
             // البيانات للجدول القديم
             $syncData[$product->id] = [
                 'quantity' => $qty,
-                'price'    => $unitPrice
+                'price' => $unitPrice
             ];
 
             // 2. تعبئة عناصر الطلب الفرعي لمنع السعر 0
             $subOrder->items()->create([
-                'product_id'  => $product->id,
-                'quantity'    => $qty,
-                'unit_price'  => $unitPrice,
+                'product_id' => $product->id,
+                'quantity' => $qty,
+                'unit_price' => $unitPrice,
                 'total_price' => $itemTotal,
             ]);
 
@@ -327,17 +327,17 @@ $syncData = [];
         // Cache::forget('order_items_' . $buyer->id);
 
         return response()->json([
-            'success'         => true,
-            'message'         => 'Order created successfully. Please proceed to payment.',
-            'order_id'        => $order->id,
-            'order_status'    => 'pending',
+            'success' => true,
+            'message' => 'Order created successfully. Please proceed to payment.',
+            'order_id' => $order->id,
+            'order_status' => 'pending',
             'pricing_details' => [
                 'subtotal_before_tax' => $taxResult['subtotal'],
-                'tax_amount'          => $taxResult['tax_amount'],
-                'total_after_tax'     => $taxResult['total'],
-                'discount_amount'     => round($discountAmount, 2),
-                'final_total'         => round($taxResult['total'] - $discountAmount, 2),
-                'tax_breakdown'       => $taxResult['breakdown'],
+                'tax_amount' => $taxResult['tax_amount'],
+                'total_after_tax' => $taxResult['total'],
+                'discount_amount' => round($discountAmount, 2),
+                'final_total' => round($taxResult['total'] - $discountAmount, 2),
+                'tax_breakdown' => $taxResult['breakdown'],
             ]
         ], 201);
     }
@@ -969,43 +969,43 @@ $syncData = [];
         ], 200);
     }
     //تابع تتبع الطلبات بالنسبة للمشتري 
-public function index(Request $request)
-{
-    $user = $request->user();
+    public function index(Request $request)
+    {
+        $user = $request->user();
 
-    // فحص دور المستخدم
-    if ($user->role !== 'buyer') {
-        return response()->json([
-            'success' => false,
-            'message' => 'Unauthorized access to buyer data.'
-        ], 403);
-    }
-    $status = $request->query('status'); // جلب حالة الفلترة (all / active / completed / cancelled أو القيمة المرسلة)
-    $perPage = $request->query('per_page', 10);
+        // فحص دور المستخدم
+        if ($user->role !== 'buyer') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized access to buyer data.'
+            ], 403);
+        }
+        $status = $request->query('status'); // جلب حالة الفلترة (all / active / completed / cancelled أو القيمة المرسلة)
+        $perPage = $request->query('per_page', 10);
 
-    // بناء الاستعلام الأساسي مع تحميل العلاقات المشروطة
-    $query = Order::query()
-        ->where('user_id', $user->id)
-        ->with([
-            'subOrders' => function ($q) use ($status) {
-                // إذا وُجد فلتر حالة، نفلتر الطلبات الفرعية المعروضة بداخل الفاتورة أيضاً
-                if ($status && $status !== 'all') {
-                    $q->where('status', $status);
+        // بناء الاستعلام الأساسي مع تحميل العلاقات المشروطة
+        $query = Order::query()
+            ->where('user_id', $user->id)
+            ->with([
+                'subOrders' => function ($q) use ($status) {
+                    // إذا وُجد فلتر حالة، نفلتر الطلبات الفرعية المعروضة بداخل الفاتورة أيضاً
+                    if ($status && $status !== 'all') {
+                        $q->where('status', $status);
+                    }
+                    $q->with(['items.product', 'seller']);
                 }
-                $q->with(['items.product', 'seller']);
-            }
-        ]);
+            ]);
 
-    // فلترة الطلبات الرئيسية لتضم فقط الفواتير التي تمتلك طلبات فرعية بهذه الحالة
-    if ($status && $status !== 'all') {
-        $query->whereHas('subOrders', function ($q) use ($status) {
-            $q->where('status', $status);
-        });
+        // فلترة الطلبات الرئيسية لتضم فقط الفواتير التي تمتلك طلبات فرعية بهذه الحالة
+        if ($status && $status !== 'all') {
+            $query->whereHas('subOrders', function ($q) use ($status) {
+                $q->where('status', $status);
+            });
+        }
+
+        $orders = $query->latest()->paginate($perPage);
+
+        return OrderResource::collection($orders);
     }
-
-    $orders = $query->latest()->paginate($perPage);
-
-    return OrderResource::collection($orders);
-}
 }
 

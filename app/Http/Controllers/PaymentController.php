@@ -218,9 +218,9 @@ class PaymentController extends Controller
             $totalAmount = (float) $order->total_price;
             $user->decrement('balance', $totalAmount);
 
-            $taxService       = app(TaxService::class);
-            $adminCommission  = 0.0;
-            $commissionRate   = 0.0;
+            $taxService = app(TaxService::class);
+            $adminCommission = 0.0;
+            $commissionRate = 0.0;
 
             foreach ($order->subOrders as $subOrder) {
                 $seller = $subOrder->seller;
@@ -228,34 +228,34 @@ class PaymentController extends Controller
                     continue;
                 }
 
-                $subTotal           = (float) $subOrder->total;
-                $commissionResult   = $taxService->calculateCommission($subTotal, $seller->role);
-                $sellerProfit       = $commissionResult['net'];
-                $adminCommission   += $commissionResult['commission'];
-                $commissionRate     = max($commissionRate, $commissionResult['rate']);
+                $subTotal = (float) $subOrder->total;
+                $commissionResult = $taxService->calculateCommission($totalAmount, $seller->role, $order->id);
+                $sellerProfit = $commissionResult['net'];
+                $adminCommission += $commissionResult['commission'];
+                $commissionRate = max($commissionRate, $commissionResult['rate']);
 
                 $seller->increment('balance', $sellerProfit);
 
                 Transaction::create([
-                    'user_id'     => $seller->id,
-                    'order_id'    => $order->id,
-                    'type'        => 'deposit',
-                    'amount'      => $sellerProfit,
+                    'user_id' => $seller->id,
+                    'order_id' => $order->id,
+                    'type' => 'deposit',
+                    'amount' => $sellerProfit,
                     'description' => "Escrow earnings from SubOrder #{$subOrder->id} (Order #{$order->id})",
                 ]);
             }
 
             $order->update([
-                'payment_status'           => 'paid_escrow',
-                'platform_commission'      => round($adminCommission, 2),
+                'payment_status' => 'paid_escrow',
+                'platform_commission' => round($adminCommission, 2),
                 'commission_rate_snapshot' => $commissionRate,
             ]);
 
             Transaction::create([
-                'user_id'     => $user->id,
-                'order_id'    => $order->id,
-                'type'        => 'payment',
-                'amount'      => $totalAmount,
+                'user_id' => $user->id,
+                'order_id' => $order->id,
+                'type' => 'payment',
+                'amount' => $totalAmount,
                 'description' => "Paid for Order #{$order->id} (Held in Escrow)",
             ]);
 
@@ -267,14 +267,14 @@ class PaymentController extends Controller
             );
 
             return response()->json([
-                'success'             => true,
-                'message'             => 'Payment successful. Funds locked in escrow until delivery confirmation.',
-                'new_balance'         => $user->fresh()->balance,
-                'order_id'            => $order->id,
-                'order_number'        => '#' . str_pad((string) $order->id, 6, '0', STR_PAD_LEFT),
-                'order_status'        => 'pending',
-                'payment_status'      => 'paid_escrow',
-                'commission_rate'     => $commissionRate,
+                'success' => true,
+                'message' => 'Payment successful. Funds locked in escrow until delivery confirmation.',
+                'new_balance' => $user->fresh()->balance,
+                'order_id' => $order->id,
+                'order_number' => '#' . str_pad((string) $order->id, 6, '0', STR_PAD_LEFT),
+                'order_status' => 'pending',
+                'payment_status' => 'paid_escrow',
+                'commission_rate' => $commissionRate,
                 'platform_commission' => round($adminCommission, 2),
             ], 200);
         });

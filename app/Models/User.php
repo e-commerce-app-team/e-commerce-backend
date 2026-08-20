@@ -64,18 +64,18 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at'   => 'datetime',
-            'phone_verified_at'   => 'datetime',
-            'otp_expires_at'      => 'datetime',
-            'password'            => 'hashed',
-            'wallet_pin'          => 'hashed',
-            'balance'             => 'decimal:2',
-            'working_hours'       => 'array',
-            'social_links'        => 'array',
-            'permissions'         => 'array',
-            'two_factor_enabled'  => 'boolean',
-            'shipping_settings'   => 'array',
-            'pickup_enabled'      => 'boolean',
+            'email_verified_at' => 'datetime',
+            'phone_verified_at' => 'datetime',
+            'otp_expires_at' => 'datetime',
+            'password' => 'hashed',
+            'wallet_pin' => 'hashed',
+            'balance' => 'decimal:2',
+            'working_hours' => 'array',
+            'social_links' => 'array',
+            'permissions' => 'array',
+            'two_factor_enabled' => 'boolean',
+            'shipping_settings' => 'array',
+            'pickup_enabled' => 'boolean',
         ];
     }
 
@@ -163,11 +163,13 @@ class User extends Authenticatable
         return $this->hasMany(StoreReview::class, 'store_id');
     }
 
+    /**
+     * المتابعون لهذا المتجر (المستخدمون الذين يتابعون هذا البائع)
+     */
     public function storeFollowers()
     {
-        return $this->hasMany(StoreFollow::class, 'store_id');
+        return $this->hasMany(StoreFollow::class, 'seller_id');
     }
-
     public function followedStores()
     {
         return $this->belongsToMany(User::class, 'store_follows', 'user_id', 'store_id')
@@ -302,38 +304,28 @@ class User extends Authenticatable
     {
         return $this->hasMany(CartItem::class);
     }
-}
-// المتاجر التي يتابعها المشتري
-public function followingStores()
-{
-    return $table = $this->belongsToMany(User::class, 'store_follows', 'user_id', 'seller_id')
-                ->withPivot('followed_at');
-}
-//المتابعون (خاص بباكند البائع إذا احتجتي معرفة من يتابعه)
-public function storeFollowers()
-{
-    return $this->belongsToMany(User::class, 'store_follows', 'seller_id', 'user_id')
-                ->withPivot('followed_at');
-}
-public function notifications()
-{
-    return $this->morphMany(DatabaseNotification::class, 'notifiable');
-}
 
-public function reviews()
-{
-    return $this->hasMany(Review::class);
-}
+    // المتاجر التي يتابعها المشتري
+    public function followingStores()
+    {
+        return $table = $this->belongsToMany(User::class, 'store_follows', 'user_id', 'seller_id')
+            ->withPivot('followed_at');
+    }
 
-public function notificationPreferences()
-{
-    return $this->hasMany(NotificationPreference::class);
-}
+    public function notifications()
+    {
+        return $this->morphMany(DatabaseNotification::class, 'notifiable');
+    }
 
-// تقييمات هذا المتجر
-public function storeReviews()
-{
-    return $this->hasMany(StoreReview::class, 'store_id');
-}
+    public function reviews()
+    {
+        return $this->hasMany(Review::class);
+    }
+
+    public function notificationPreferences()
+    {
+        return $this->hasMany(NotificationPreference::class);
+    }
+
 
 }

@@ -4,7 +4,6 @@ namespace Database\Seeders;
 
 use App\Models\Category;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Str;
 
 class CategorySeeder extends Seeder
 {
@@ -169,7 +168,7 @@ class CategorySeeder extends Seeder
             );
         }
 
-        $this->command->info('✅ تم إنشاء التصنيفات مع نسب الضريبة بنجاح!');
+        $this->command->info('✅ تم إنشاء التصنيفات بنجاح!');
         $this->command->info('   0%  → منتجات غذائية، أدوات زراعية');
         $this->command->info('   5%  → الإلكترونيات، الأزياء، المنزل، الرياضة...');
         $this->command->info('   10% → الصحة والجمال، السيارات وقطع الغيار');

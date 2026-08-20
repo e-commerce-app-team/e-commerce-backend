@@ -321,12 +321,12 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     // إدارة الإعلانات (Admin Ad Management)
-    Route::get('ads/all', [AdminController::class, 'allAds'])->middleware(['auth:sanctum', 'super_admin']);
-    Route::get('ads/pending', [AdminController::class, 'pendingAds'])->middleware(['auth:sanctum', 'super_admin']);
-    Route::get('ads/active', [AdminController::class, 'activeAds'])->middleware(['auth:sanctum', 'super_admin']);
-    Route::get('ads/rejected', [AdminController::class, 'rejectedAds'])->middleware(['auth:sanctum', 'super_admin']);
-    Route::get('ads/expired', [AdminController::class, 'expiredAds'])->middleware(['auth:sanctum', 'super_admin']);
-    Route::get('ads/{id}/details', [AdminController::class, 'showAdDetails'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/all', [AdminController::class, 'allAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/pending', [AdminController::class, 'pendingAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/active', [AdminController::class, 'activeAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/rejected', [AdminController::class, 'rejectedAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/expired', [AdminController::class, 'expiredAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/{id}/details', [AdminController::class, 'showAdDetails'])->middleware(['auth:sanctum', 'super_admin']);
 
     // إدارة الفئات البديلة (Alternate Category Management)
     Route::get('admin/categories', [AdminController::class, 'allCategories'])->middleware(['auth:sanctum', 'super_admin']);
