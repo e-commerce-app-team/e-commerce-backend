@@ -23,6 +23,30 @@ class PaymentController extends Controller
         return response()->json(['balance' => $user->balance]);
     }
 
+    public function requestDeposit(Request $request)
+    {
+        $user = auth()->user();
+        abort_if($user->role !== 'buyer', 403);
+        $data = $request->validate([
+            'amount' => 'required|numeric|min:1',
+            'payment_method' => 'nullable|string|max:50',
+            'reference' => 'nullable|string|max:255',
+        ]);
+        $id = DB::table('wallet_deposit_requests')->insertGetId([
+            'user_id' => $user->id, 'amount' => $data['amount'],
+            'payment_method' => $data['payment_method'] ?? 'manual',
+            'reference' => $data['reference'] ?? null, 'status' => 'pending',
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        return response()->json(['success' => true, 'message' => 'Deposit request submitted for admin approval.', 'data' => DB::table('wallet_deposit_requests')->find($id)], 201);
+    }
+
+    public function depositRequests()
+    {
+        abort_if(auth()->user()->role !== 'buyer', 403);
+        return response()->json(['success' => true, 'data' => DB::table('wallet_deposit_requests')->where('user_id', auth()->id())->latest()->get()]);
+    }
+
     // public function payAndTransfer(Request $request, $orderId)
     // {
     //    $user = auth()->user();
@@ -338,4 +362,3 @@ class PaymentController extends Controller
 
 
 }
-

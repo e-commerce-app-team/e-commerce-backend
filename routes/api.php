@@ -14,6 +14,7 @@ use App\Http\Controllers\PayoutController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\StaffController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\BuyerController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -138,6 +139,48 @@ Route::get('ads/featured-stores', [AdController::class, 'getFeaturedStores']);
 
 
 Route::get('categories', [CategoryController::class, 'getAllCategories']);
+
+// Buyer catalogue is public; user-specific state is included when a token is present.
+Route::get('buyer/products', [BuyerController::class, 'products']);
+Route::get('buyer/categories', [CategoryController::class, 'getAllCategories']);
+Route::get('buyer/products/featured', [BuyerController::class, 'products'])->defaults('section', 'featured');
+Route::get('buyer/products/flash-sale', [BuyerController::class, 'products'])->defaults('section', 'flash_sale');
+Route::get('buyer/products/trending', [BuyerController::class, 'products'])->defaults('section', 'trending');
+Route::get('buyer/products/new-arrivals', [BuyerController::class, 'products'])->defaults('section', 'new_arrivals');
+Route::get('buyer/products/offers', [BuyerController::class, 'products'])->defaults('section', 'offers');
+Route::get('buyer/products/recommended', [BuyerController::class, 'products'])->defaults('section', 'recommended');
+Route::get('buyer/stores/featured', [BuyerController::class, 'stores'])->defaults('section', 'featured');
+Route::get('buyer/products/{id}', [BuyerController::class, 'product']);
+Route::get('buyer/stores', [BuyerController::class, 'stores']);
+Route::get('buyer/stores/{id}', [BuyerController::class, 'store']);
+Route::get('buyer/stores/{store_id}/products', [BuyerController::class, 'storeProducts']);
+Route::get('buyer/stores/{store_id}/departments', [BuyerController::class, 'storeDepartments']);
+Route::get('buyer/stores/{id}/reviews', [BuyerController::class, 'storeReviews']);
+Route::get('buyer/products/{id}/reviews', [BuyerController::class, 'productReviews']);
+
+Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
+    Route::get('profile', [BuyerController::class, 'profile']);
+    Route::put('profile', [BuyerController::class, 'updateProfile']);
+    Route::get('addresses', [BuyerController::class, 'addresses']);
+    Route::post('addresses', [BuyerController::class, 'addAddress']);
+    Route::put('addresses/{id}', [BuyerController::class, 'updateAddress']);
+    Route::delete('addresses/{id}', [BuyerController::class, 'deleteAddress']);
+    Route::post('addresses/{id}/default', [BuyerController::class, 'setDefaultAddress']);
+    Route::get('wallet/deposit-requests', [PaymentController::class, 'depositRequests']);
+    Route::post('wallet/deposit-requests', [PaymentController::class, 'requestDeposit']);
+    Route::get('cart', [BuyerController::class, 'cart']);
+    Route::post('cart/add', [BuyerController::class, 'addCart']);
+    Route::put('cart/update/{id}', [BuyerController::class, 'updateCart']);
+    Route::delete('cart/remove/{id}', [BuyerController::class, 'removeCart']);
+    Route::delete('cart/clear', [BuyerController::class, 'clearCart']);
+    Route::get('favorites', [BuyerController::class, 'favorites']);
+    Route::post('favorites/{id}/toggle', [BuyerController::class, 'toggleFavorite']);
+    Route::post('reviews', [BuyerController::class, 'addProductReview']);
+    Route::get('reviews', [BuyerController::class, 'myReviews']);
+    Route::put('reviews/{id}', [BuyerController::class, 'updateReview']);
+    Route::post('stores/{id}/reviews', [BuyerController::class, 'addStoreReview']);
+    Route::post('stores/{id}/follow', [BuyerController::class, 'toggleFollow']);
+});
 
 // تأكد من وضع هذه المسارات داخل الـ Middleware الخاص بـ sanctum لتحديد هوية التاجر عبر auth()->id()
 // المسارات محمية بـ Sanctum لتحديد هوية التاجر عبر الـ Token
@@ -268,7 +311,3 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('admin/settings', [AdminSettingsController::class, 'index'])->middleware(['auth:sanctum', 'super_admin']);
     Route::put('admin/settings/{key}', [AdminSettingsController::class, 'update'])->middleware(['auth:sanctum', 'super_admin']);
 });
-
-
-
-

@@ -157,7 +157,7 @@ class CategoryController extends Controller
     // عرض الشجرة كاملة للتصنيفات العامة في السيستم
     public function getAllCategories(): JsonResponse
     {
-        $categories = Category::whereNull('parent_id')
+        $categories = Category::whereNull('parent_id')->where('is_visible', true)
             ->with(['recursiveChildren'])
             ->orderBy('order_position', 'asc')
             ->get();

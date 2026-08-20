@@ -48,7 +48,9 @@ class Category extends Model
     // علاقة جلب المستوى التالي من الأقسام الفرعية فقط
     public function children()
     {
-        return $this->hasMany(Category::class, 'parent_id')->orderBy('order_position', 'asc');
+        return $this->hasMany(Category::class, 'parent_id')
+            ->where('is_visible', true)
+            ->orderBy('order_position', 'asc');
     }
 
     // السحر: علاقة عودية تجلب الشجرة كاملة مهما تعمقت (أبناء، أحفاد...)
