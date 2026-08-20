@@ -26,6 +26,9 @@ class Order extends Model
         // 🔥 إضافة حقل الكوبون
         'coupon_id',
         'discount_amount',
+        'address_id',
+        'shipping_lat',
+        'shipping_lng',
         // 🧾 حقول النظام الضريبي والعمولة
         'subtotal_before_tax',
         'tax_amount',
@@ -121,4 +124,9 @@ class Order extends Model
     {
         return $this->discount_amount ?? 0;
     }
+
+    public function subOrders()
+{
+    return $this->hasMany(SubOrder::class);
+}
 }

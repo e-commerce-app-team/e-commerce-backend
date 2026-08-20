@@ -42,6 +42,13 @@ class BuyerController extends Controller
         $ratingSubquery = DB::table('product_reviews')
             ->selectRaw('COALESCE(AVG(product_reviews.rating), 0)')
             ->whereColumn('product_reviews.product_id', 'products.id');
+        $reviewCountSubquery = DB::table('product_reviews')
+            ->selectRaw('COUNT(*)')
+            ->whereColumn('product_reviews.product_id', 'products.id');
+        $query->addSelect([
+            'average_rating' => $ratingSubquery,
+            'reviews_count' => $reviewCountSubquery,
+        ]);
 
         if ($section === 'offers') {
             $query->whereNotNull('offer_price')
@@ -85,19 +92,22 @@ class BuyerController extends Controller
                     ->pluck('products.category_id')->all());
                 $preferredCategoryIds = array_values(array_unique(array_map('intval', $preferredCategoryIds)));
             }
-            $query->where('quantity', '>', 0)->addSelect(['average_rating' => $ratingSubquery]);
+            $query->where('quantity', '>', 0);
             if ($preferredCategoryIds !== []) {
                 $query->whereIn('category_id', $preferredCategoryIds)->orderByDesc('average_rating')->orderByDesc('created_at');
             } else {
                 $query->orderByDesc('average_rating')->latest('created_at');
             }
         } elseif ($section === 'featured') {
-            $query->where('quantity', '>', 0)->addSelect(['average_rating' => $ratingSubquery])
+            $query->where('quantity', '>', 0)
                 ->orderByDesc('average_rating')->orderByDesc('sales_count')->latest('created_at');
         }
 
         $page = $query->paginate($request->integer('per_page', 15));
-        $page->getCollection()->transform(fn (Product $product) => $this->productData($product));
+        $favoriteIds = auth()->check()
+            ? DB::table('favorites')->where('user_id', auth()->id())->pluck('product_id')->flip()->all()
+            : null;
+        $page->getCollection()->transform(fn (Product $product) => $this->productData($product, false, $favoriteIds));
         $payload = ['success' => true, 'data' => $page];
         if ($section === 'flash_sale') {
             $payload['meta'] = ['flash_sale_ends_at' => $page->getCollection()->min('offer_expires_at')];
@@ -108,7 +118,7 @@ class BuyerController extends Controller
     public function product(string $id)
     {
         $product = Product::with(['variants', 'seller', 'category'])->findOrFail($id);
-        return response()->json(['success' => true, 'data' => $this->productData($product)]);
+        return response()->json(['success' => true, 'data' => $this->productData($product, true)]);
     }
 
     public function stores(Request $request)
@@ -435,13 +445,24 @@ class BuyerController extends Controller
         return response()->json(['success' => true]);
     }
 
-    private function productData(Product $product): array
+    private function productData(Product $product, bool $includeReviews = false, ?array $favoriteIds = null): array
     {
-        $reviews = DB::table('product_reviews')->where('product_id', $product->id);
         $data = $product->toArray();
         $originalPrice = (float) $product->original_price;
         $salePrice = $product->offer_price === null ? null : (float) $product->offer_price;
         $images = is_array($product->images) ? $product->images : [];
+        $averageRating = array_key_exists('average_rating', $data)
+            ? (float) $data['average_rating']
+            : (float) DB::table('product_reviews')->where('product_id', $product->id)->avg('rating');
+        $reviewsCount = array_key_exists('reviews_count', $data)
+            ? (int) $data['reviews_count']
+            : DB::table('product_reviews')->where('product_id', $product->id)->count();
+        $reviews = $includeReviews
+            ? DB::table('product_reviews')->join('users', 'users.id', '=', 'product_reviews.user_id')
+                ->where('product_reviews.product_id', $product->id)
+                ->select('product_reviews.*', DB::raw("concat(users.first_name, ' ', users.last_name) as user_name"))
+                ->latest('product_reviews.created_at')->get()
+            : [];
         return array_merge($data, [
             'price' => $salePrice ?? $originalPrice,
             'old_price' => $salePrice !== null && $salePrice < $originalPrice ? $originalPrice : null,
@@ -454,13 +475,12 @@ class BuyerController extends Controller
             'store_id' => $product->user_id, 'seller_id' => $product->user_id,
             'store_name' => $product->seller?->store_name ?? '',
             'store_logo' => $product->seller?->store_logo ?? '',
-            'is_favorite' => auth()->check() && DB::table('favorites')->where(['user_id' => auth()->id(), 'product_id' => $product->id])->exists(),
-            'rating' => round((float) $reviews->avg('rating'), 1),
-            'reviews_count' => $reviews->count(),
-            'reviews' => DB::table('product_reviews')->join('users', 'users.id', '=', 'product_reviews.user_id')
-                ->where('product_reviews.product_id', $product->id)
-                ->select('product_reviews.*', DB::raw("concat(users.first_name, ' ', users.last_name) as user_name"))
-                ->latest('product_reviews.created_at')->get(),
+            'is_favorite' => $favoriteIds !== null
+                ? isset($favoriteIds[$product->id])
+                : (auth()->check() && DB::table('favorites')->where(['user_id' => auth()->id(), 'product_id' => $product->id])->exists()),
+            'rating' => round($averageRating, 1),
+            'reviews_count' => $reviewsCount,
+            'reviews' => $reviews,
         ]);
     }
 }

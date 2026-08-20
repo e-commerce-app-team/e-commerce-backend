@@ -70,6 +70,6 @@ class Category extends Model
 
     public function getProductsCountAttribute(): int
     {
-        return $this->products()->count();
+        return $this->products()->where('status', 'active')->count();
     }
 }

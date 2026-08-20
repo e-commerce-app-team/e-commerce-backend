@@ -1,22 +1,33 @@
 <?php
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\ProductController;
 use App\Http\Controllers\AdminSettingsController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\Buyer\BuyerProfileController;
+use App\Http\Controllers\Buyer\StoreFollowController;
+use App\Http\Controllers\Buyer\NotificationController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\StoreReviewController;
+use App\Http\Controllers\Buyer\StoreController;
+use App\Http\Controllers\Buyer\CartController;
+use App\Http\Controllers\Buyer\BannerController;
 use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
-use App\Http\Controllers\ProductController;
 use App\Http\Controllers\StaffController;
+use App\Http\Controllers\Buyer\FavoriteController;
+use App\Http\Controllers\Buyer\SearchController;
+use App\Http\Controllers\Buyer\ReviewController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\BuyerController;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Route;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -27,6 +38,7 @@ Route::Post('login', [UserController::class, 'login']);
 Route::post('register/buyer', [UserController::class, 'registerBuyer']);
 Route::post('register/seller', [UserController::class, 'registerSeller']);
 Route::post('logout', [UserController::class, 'logout'])->middleware('auth:sanctum');
+Route::post('auth/fcm-token', [UserController::class, 'saveFcmToken'])->middleware('auth:sanctum');
 
 // قبول دعوة الموظف (لا يحتاج Token)
 Route::post('auth/staff/accept-invite', [StaffController::class, 'acceptInvite']);
@@ -103,28 +115,28 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('orders/ready-shipping', [OrderController::class, 'readyForShipping']);
 
     Route::get('my-orders', [OrderController::class, 'myOrders']);
-    
+
     // Chat & Messaging Routes
     Route::prefix('chat')->group(function () {
         Route::get('firebase-token', [ChatController::class, 'generateFirebaseToken']);
-        
+
         // Quick Replies
         Route::get('quick-replies', [ChatController::class, 'getQuickReplies']);
         Route::post('quick-replies', [ChatController::class, 'storeQuickReply']);
         Route::put('quick-replies/{id}', [ChatController::class, 'updateQuickReply']);
         Route::delete('quick-replies/{id}', [ChatController::class, 'deleteQuickReply']);
-        
+
         // Auto Replies
         Route::get('auto-replies', [ChatController::class, 'getAutoReplies']);
         Route::post('auto-replies', [ChatController::class, 'storeAutoReply']);
         Route::put('auto-replies/{id}', [ChatController::class, 'updateAutoReply']);
         Route::delete('auto-replies/{id}', [ChatController::class, 'deleteAutoReply']);
-        
+
         // Block / Report
         Route::get('blocked-users', [ChatController::class, 'getBlockedUsers']);
         Route::post('block-user', [ChatController::class, 'blockUser']);
         Route::delete('unblock-user/{id}', [ChatController::class, 'unblockUser']);
-        
+
         Route::post('report-user', [ChatController::class, 'reportUser']);
     });
 });
@@ -191,7 +203,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::patch('merchant/departments/reorder', [MerchantDepartment::class, 'reorderDepartment']);
     Route::post('merchant/departments/{id}/update', [MerchantDepartment::class, 'updateDepartment']);
     Route::delete('merchant/departments/{id}', [MerchantDepartment::class, 'destroyDepartment']);
-
     // 📌 مسارات الفروع / المستودعات للتاجر
     Route::get('merchant/branches', [App\Http\Controllers\BranchController::class, 'index']);
     Route::post('merchant/branches', [App\Http\Controllers\BranchController::class, 'store']);
@@ -259,14 +270,14 @@ Route::middleware('auth:sanctum')->group(function () {
     // 📌 Routes العامة (لا تحتاج تسجيل دخول) تم نقلها لخارج الميدلوير
 
     // 📌 Routes للمستخدمين المسجلين (تتبع المشاهدات والنقرات)
-// ============================================================
+    // ============================================================
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('ads/{adId}/view', [AdController::class, 'trackView']);
         Route::get('ads/{adId}/click', [AdController::class, 'trackClick']);
     });
 
     // 📌 Routes للتاجر (Vendor / Wholesale)
-// ============================================================
+    // ============================================================
     Route::middleware('auth:sanctum')->group(function () {
 
         // 📌 أنواع الإعلانات والأسعار
@@ -287,18 +298,41 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
     // 📌 Routes للأدمن (Admin)
-// ============================================================
+    // ============================================================
 
     // إدارة الإعلانات
-    Route::get('ads/index', [AdminController::class, 'index'])->middleware(['auth:sanctum', 'super_admin']);
 
-    Route::get('ads/{id}/show', [AdminController::class, 'show'])->middleware(['auth:sanctum', 'super_admin']);
     Route::post('ads/{id}/approve', [AdminController::class, 'approveAd'])->middleware(['auth:sanctum', 'super_admin']);
     Route::post('ads/{id}/reject', [AdminController::class, 'rejectAd'])->middleware(['auth:sanctum', 'super_admin']);
     Route::post('ads/{id}/deactivate', [AdminController::class, 'deactivateAd'])->middleware(['auth:sanctum', 'super_admin']);
 
     // إحصائيات الإعلانات
-    Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'isSuperAdmin']);
+    Route::get('ads/stats/summary', [AdminController::class, 'statsAd'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/dashboard/stats', [AdminController::class, 'dashboardStats'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/orders/latest', [AdminController::class, 'latestOrders'])->middleware(['auth:sanctum', 'super_admin']);
+
+    // 📌 ضع Routes الجديدة هنا (بعد dashboardStats)
+// 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥
+    Route::middleware(['auth:sanctum', 'super_admin'])->group(function () {
+        // المنتجات الأكثر مبيعاً
+        Route::get('admin/products/top-selling', [AdminController::class, 'topSellingProducts']);
+
+        // المنتجات الأقل مبيعاً
+        Route::get('admin/products/least-selling', [AdminController::class, 'leastSellingProducts']);
+
+        // أرباح الإعلانات الشهرية
+        Route::get('admin/ad-revenue/monthly', [AdminController::class, 'adRevenueMonthly']);
+
+        // نمو المستخدمين الشهري
+        Route::get('admin/users-growth/monthly', [AdminController::class, 'usersGrowthMonthly']);
+
+        // الإعلانات الأكثر أداءً
+        Route::get('admin/ads/top-performing', [AdminController::class, 'topPerformingAds']);
+
+        // أفضل المشتريين
+        Route::get('admin/buyers/top', [AdminController::class, 'topBuyers']);
+    });
+    // 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥🔥 🔥🔥
 
     // إدارة الأقسام والتصنيفات (Admin Category Management)
     Route::post('categories/store', [CategoryController::class, 'storeCategory'])->middleware(['auth:sanctum', 'super_admin']);
@@ -310,4 +344,34 @@ Route::middleware('auth:sanctum')->group(function () {
     // إعدادات المنصة (Admin Settings - Platform commission control)
     Route::get('admin/settings', [AdminSettingsController::class, 'index'])->middleware(['auth:sanctum', 'super_admin']);
     Route::put('admin/settings/{key}', [AdminSettingsController::class, 'update'])->middleware(['auth:sanctum', 'super_admin']);
+
+    // إدارة المنتجات (Admin Product Management)
+    Route::get('products', [AdminController::class, 'allProducts'])->middleware(['auth:sanctum', 'isProductsAdmin']);
+    Route::get('products/vendors', [AdminController::class, 'vendorProducts'])->middleware(['auth:sanctum', 'isProductsAdmin']);
+    Route::get('products/wholesale', [AdminController::class, 'wholesaleProducts'])->middleware(['auth:sanctum', 'isProductsAdmin']);
+    Route::get('products/{id}', [AdminController::class, 'showProduct'])->middleware(['auth:sanctum', 'isProductsAdmin']);
+    Route::get('sellers/inventory', [AdminController::class, 'allSellersInventory'])->middleware(['auth:sanctum', 'isProductsAdmin']);
+    Route::delete('products/{id}', [AdminController::class, 'deleteProduct'])->middleware(['auth:sanctum', 'isProductsAdmin']);
+
+    // إدارة الطلبات (Admin Order Management)
+    Route::middleware(['auth:sanctum', 'isOrdersAdmin'])->group(function () {
+        Route::get('orders/vendors', [AdminController::class, 'vendorOrders']);
+        Route::get('orders/wholesale', [AdminController::class, 'wholesaleOrders']);
+        Route::get('orders', [AdminController::class, 'allOrders']);
+        Route::get('orders/{id}', [AdminController::class, 'showOrder'])->where('id', '[0-9]+');
+    });
+
+    // إدارة الإعلانات (Admin Ad Management)
+    Route::get('admin/ads/all', [AdminController::class, 'allAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/pending', [AdminController::class, 'pendingAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/active', [AdminController::class, 'activeAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/rejected', [AdminController::class, 'rejectedAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/expired', [AdminController::class, 'expiredAds'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::get('admin/ads/{id}/details', [AdminController::class, 'showAdDetails'])->middleware(['auth:sanctum', 'super_admin']);
+
+    // إدارة الفئات البديلة (Alternate Category Management)
+    Route::get('admin/categories', [AdminController::class, 'allCategories'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::post('admin/categories', [AdminController::class, 'createCategory'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::post('admin/categories/{id}', [AdminController::class, 'updateCategory'])->middleware(['auth:sanctum', 'super_admin']);
+    Route::delete('admin/categories/{id}', [AdminController::class, 'deleteCategory'])->middleware(['auth:sanctum', 'super_admin']);
 });

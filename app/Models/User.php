@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -49,6 +50,9 @@ class User extends Authenticatable
         'phone_verified_at',
         'two_factor_enabled',
         'two_factor_method',
+        'fcm_token',
+        'shipping_settings',
+        'pickup_enabled',
     ];
 
     protected $hidden = [
@@ -60,17 +64,24 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at'   => 'datetime',
-            'phone_verified_at'   => 'datetime',
-            'otp_expires_at'      => 'datetime',
-            'password'            => 'hashed',
-            'wallet_pin'          => 'hashed',
-            'balance'             => 'decimal:2',
-            'working_hours'       => 'array',
-            'social_links'        => 'array',
-            'permissions'         => 'array',
-            'two_factor_enabled'  => 'boolean',
+            'email_verified_at' => 'datetime',
+            'phone_verified_at' => 'datetime',
+            'otp_expires_at' => 'datetime',
+            'password' => 'hashed',
+            'wallet_pin' => 'hashed',
+            'balance' => 'decimal:2',
+            'working_hours' => 'array',
+            'social_links' => 'array',
+            'permissions' => 'array',
+            'two_factor_enabled' => 'boolean',
+            'shipping_settings' => 'array',
+            'pickup_enabled' => 'boolean',
         ];
+    }
+
+    public function buyerAddresses()
+    {
+        return $this->hasMany(BuyerAddress::class);
     }
 
     // ─── OTP & 2FA Helpers ──────────────────────────────────────────────────
@@ -147,6 +158,39 @@ class User extends Authenticatable
         return $this->hasMany(Product::class, 'user_id');
     }
 
+    public function storeReviews()
+    {
+        return $this->hasMany(StoreReview::class, 'store_id');
+    }
+
+    /**
+     * المتابعون لهذا المتجر (المستخدمون الذين يتابعون هذا البائع)
+     */
+    public function storeFollowers()
+    {
+        return $this->hasMany(StoreFollow::class, 'seller_id');
+    }
+    public function followedStores()
+    {
+        return $this->belongsToMany(User::class, 'store_follows', 'user_id', 'store_id')
+            ->withTimestamps();
+    }
+
+    /**
+     * الطلبات التي قام بها المستخدم كمشتري
+     */
+    public function orders()
+    {
+        return $this->hasMany(Order::class, 'user_id');
+    }
+
+    /**
+     * الطلبات التي قام بها المستخدم كبائع
+     */
+    public function sellerOrders()
+    {
+        return $this->hasMany(Order::class, 'seller_id');
+    }
     // ============================================================
     // 🔥 علاقات الموظفين (Staff Management)
     // ============================================================
@@ -255,4 +299,33 @@ class User extends Authenticatable
     {
         return $this->belongsTo(User::class);
     }
+
+    public function cartItems()
+    {
+        return $this->hasMany(CartItem::class);
+    }
+
+    // المتاجر التي يتابعها المشتري
+    public function followingStores()
+    {
+        return $table = $this->belongsToMany(User::class, 'store_follows', 'user_id', 'seller_id')
+            ->withPivot('followed_at');
+    }
+
+    public function notifications()
+    {
+        return $this->morphMany(DatabaseNotification::class, 'notifiable');
+    }
+
+    public function reviews()
+    {
+        return $this->hasMany(Review::class);
+    }
+
+    public function notificationPreferences()
+    {
+        return $this->hasMany(NotificationPreference::class);
+    }
+
+
 }
