@@ -10,12 +10,14 @@ use App\Models\Ad;
 use App\Models\Coupon;
 use App\Models\User;
 use App\Services\OtpService;
+use App\Services\WalletService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 
 class UserController extends Controller
@@ -185,7 +187,11 @@ class UserController extends Controller
         $validated['email_verified_at'] = $isVerified ? now() : null;
 
         // 4. إنشاء المستخدم
-        $user = User::create($validated);
+        $user = DB::transaction(function () use ($validated) {
+            $user = User::create($validated);
+            app(WalletService::class)->initializeNewUser($user);
+            return $user->fresh();
+        });
 
         if (!$isVerified) {
             // 5. إرسال OTP للتحقق من البريد الإلكتروني (الطريقة القديمة)
@@ -250,7 +256,11 @@ class UserController extends Controller
         $validated['email_verified_at'] = $isVerified ? now() : null;
 
         // 6. الحفظ
-        $user = User::create($validated);
+        $user = DB::transaction(function () use ($validated) {
+            $user = User::create($validated);
+            app(WalletService::class)->initializeNewUser($user);
+            return $user->fresh();
+        });
 
         // تعديل: شحن العلاقة الصحيحة الموجودة بالموديل
         $user->load('globalCategory');
@@ -384,6 +394,58 @@ class UserController extends Controller
             'message' => 'Store settings updated successfully.',
             'user' => $user
         ], 200);
+    }
+
+    public function getShippingSettings()
+    {
+        $user = auth()->user();
+        abort_unless(in_array($user->role, ['vendor', 'wholesale'], true), 403);
+        $settings = $user->shipping_settings ?? [];
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'shipping_mode' => $settings['shipping_mode'] ?? 'self_delivery',
+                'platform_available' => false,
+                'delivery_options' => [
+                    'pickup' => array_key_exists('pickup', $settings['delivery_options'] ?? [])
+                        ? (bool) $settings['delivery_options']['pickup'] : (bool) ($user->pickup_enabled ?? true),
+                    'standard' => array_key_exists('standard', $settings['delivery_options'] ?? [])
+                        ? (bool) $settings['delivery_options']['standard'] : true,
+                    'express' => array_key_exists('express', $settings['delivery_options'] ?? [])
+                        ? (bool) $settings['delivery_options']['express'] : false,
+                ],
+                'main_store_location' => [
+                    'latitude' => $user->latitude,
+                    'longitude' => $user->longitude,
+                    'detailed_address' => $user->detailed_address,
+                    'is_set' => app(\App\Services\ShippingService::class)->hasMainStoreLocation($user),
+                ],
+            ],
+        ]);
+    }
+
+    public function updateShippingSettings(Request $request)
+    {
+        $user = auth()->user();
+        abort_unless(in_array($user->role, ['vendor', 'wholesale'], true), 403);
+        $validated = $request->validate([
+            'shipping_mode' => 'required|in:self_delivery,platform_delivery',
+            'delivery_options' => 'required|array',
+            'delivery_options.pickup' => 'required|boolean',
+            'delivery_options.standard' => 'required|boolean',
+            'delivery_options.express' => 'required|boolean',
+        ]);
+        if ($validated['shipping_mode'] === 'platform_delivery') {
+            return response()->json(['success' => false, 'message' => 'Platform shipping is not available yet.'], 422);
+        }
+        $settings = $user->shipping_settings ?? [];
+        $settings['shipping_mode'] = 'self_delivery';
+        $settings['delivery_options'] = $validated['delivery_options'];
+        $user->update([
+            'shipping_settings' => $settings,
+            'pickup_enabled' => (bool) $validated['delivery_options']['pickup'],
+        ]);
+        return response()->json(['success' => true, 'data' => $settings, 'message' => 'Shipping settings updated.']);
     }
 
     // 🔄 [تابع 3]: استرجاع وجلب المعلومات للعرض (GET / READ)
@@ -937,7 +999,14 @@ class UserController extends Controller
         ]);
 
         // ✅ بدلاً من السطرين السابقين
-        $user->decrement('balance', $price);
+        DB::transaction(function () use ($user, $price, $ad) {
+            $lockedUser = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+            app(WalletService::class)->debitAvailable($lockedUser, (float) $price, [
+                'type' => 'payment',
+                'reference' => "ad:{$ad->id}:payment",
+                'description' => "Payment for advertising request #{$ad->id}",
+            ]);
+        });
 
         return response()->json([
             'success' => true,
@@ -1168,4 +1237,3 @@ class UserController extends Controller
         return $code;
     }
 }
-

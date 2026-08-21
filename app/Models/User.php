@@ -40,9 +40,12 @@ class User extends Authenticatable
         'permissions',
         'seller_id',
         'balance',
+        'locked_balance',
+        'wallet_qr_token',
         'payout_method',
         'payout_account',
         'wallet_pin',
+        'wallet_qr_token',
         // ─── OTP & 2FA ────────────────────────────────────────────────
         'otp_code',
         'otp_expires_at',
@@ -70,6 +73,7 @@ class User extends Authenticatable
             'password' => 'hashed',
             'wallet_pin' => 'hashed',
             'balance' => 'decimal:2',
+            'locked_balance' => 'decimal:2',
             'working_hours' => 'array',
             'social_links' => 'array',
             'permissions' => 'array',
@@ -143,6 +147,11 @@ class User extends Authenticatable
         return $this->hasMany(Transaction::class);
     }
 
+    public function walletDepositRequests()
+    {
+        return $this->hasMany(WalletDepositRequest::class);
+    }
+
     public function sales()
     {
         return $this->hasMany(Order::class, 'seller_id');
@@ -168,7 +177,8 @@ class User extends Authenticatable
      */
     public function storeFollowers()
     {
-        return $this->hasMany(StoreFollow::class, 'seller_id');
+        // Existing database snapshots use store_id for the followed seller.
+        return $this->hasMany(StoreFollow::class, 'store_id', 'id');
     }
     public function followedStores()
     {

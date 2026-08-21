@@ -71,6 +71,8 @@ Route::post('user/toggle-2fa', [OtpController::class, 'toggleTwoFactor'])->middl
 Route::post('seller/store-settings/create', [UserController::class, 'createStoreSettings'])->middleware('auth:sanctum');
 Route::post('seller/store-settings/update', [UserController::class, 'updateStoreSettings'])->middleware('auth:sanctum');
 Route::get('seller/store-settings', [UserController::class, 'getStoreSettings'])->middleware('auth:sanctum');
+Route::get('seller/shipping-settings', [UserController::class, 'getShippingSettings'])->middleware('auth:sanctum');
+Route::post('seller/shipping-settings', [UserController::class, 'updateShippingSettings'])->middleware('auth:sanctum');
 
 Route::post('admin/login', [AdminAuthController::class, 'login']);
 Route::post('admin/logout', [AdminAuthController::class, 'logout'])->middleware('auth:sanctum');
@@ -80,6 +82,12 @@ Route::post('admin/users/reject/{id}', [AdminController::class, 'reject'])->midd
 Route::delete('admin/users/{id}', [AdminController::class, 'block'])->middleware(['auth:sanctum', 'isUsersAdmin']);
 Route::post('unblock/{id}', [AdminController::class, 'unblock'])->middleware(['auth:sanctum', 'isUsersAdmin']);
 Route::post('admin/deposit', [AdminController::class, 'depositByAdmin'])->middleware(['auth:sanctum', 'isUsersAdmin']);
+Route::get('admin/wallet/deposit-requests', [AdminController::class, 'depositRequests'])->middleware(['auth:sanctum', 'isUsersAdmin']);
+Route::post('admin/wallet/deposit-requests/{id}/approve', [AdminController::class, 'approveDeposit'])->middleware(['auth:sanctum', 'isUsersAdmin']);
+Route::post('admin/wallet/deposit-requests/{id}/reject', [AdminController::class, 'rejectDeposit'])->middleware(['auth:sanctum', 'isUsersAdmin']);
+Route::get('admin/wallet/withdrawal-requests', [AdminController::class, 'withdrawalRequests'])->middleware(['auth:sanctum', 'isUsersAdmin']);
+Route::post('admin/wallet/withdrawal-requests/{id}/approve', [AdminController::class, 'approveWithdrawal'])->middleware(['auth:sanctum', 'isUsersAdmin']);
+Route::post('admin/wallet/withdrawal-requests/{id}/reject', [AdminController::class, 'rejectWithdrawal'])->middleware(['auth:sanctum', 'isUsersAdmin']);
 Route::get('all', [AdminController::class, 'allUsers'])->middleware(['auth:sanctum', 'isUsersAdmin']);
 Route::get('pending', [AdminController::class, 'pendingUsers'])->middleware(['auth:sanctum', 'isUsersAdmin']);
 Route::get('approved', [AdminController::class, 'approvedUsers'])->middleware(['auth:sanctum', 'isUsersAdmin']);
@@ -92,9 +100,18 @@ Route::post('payouts/instant-withdraw', [PayoutController::class, 'instantWithdr
 
 Route::get('buyerBalance', [PaymentController::class, 'getWalletBalance'])->middleware('auth:sanctum');
 Route::get('buyerHistory', [PaymentController::class, 'getTransactionHistory'])->middleware('auth:sanctum');
+Route::get('wallet/transactions', [PaymentController::class, 'getTransactionHistory'])->middleware('auth:sanctum');
+Route::post('wallet/transfers', [PaymentController::class, 'transfer'])->middleware('auth:sanctum');
+Route::get('wallet/recipients', [PaymentController::class, 'recipients'])->middleware('auth:sanctum');
+Route::get('wallet/qr', [PaymentController::class, 'myWalletQr'])->middleware('auth:sanctum');
+Route::post('wallet/qr/resolve', [PaymentController::class, 'resolveQr'])->middleware('auth:sanctum');
+Route::post('wallet/withdrawals', [PayoutController::class, 'requestWithdrawal'])->middleware('auth:sanctum');
+Route::get('wallet/withdrawals', [PayoutController::class, 'payoutHistory'])->middleware('auth:sanctum');
 Route::post('orders/{orderId}/pay', [PaymentController::class, 'payAndTransfer'])->middleware('auth:sanctum');
 
 Route::post('orders/{orderId}/confirm-delivery', [PaymentController::class, 'confirmDelivery'])->middleware('auth:sanctum');
+Route::post('orders/{orderId}/payment-qr', [PaymentController::class, 'generateOrderPaymentQr'])->middleware('auth:sanctum');
+Route::post('sub-orders/{subOrderId}/payment-qr', [PaymentController::class, 'generateSubOrderPaymentQr'])->middleware('auth:sanctum');
 
 
 Route::middleware(['auth:sanctum'])->group(function () {
@@ -110,6 +127,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('orders/export-csv', [OrderController::class, 'exportCSV']);
 
     Route::post('orders/accept', [OrderController::class, 'acceptOrder']);
+    Route::post('orders/shipping-details', [OrderController::class, 'setShippingDetails']);
     Route::post('orders/reject', [OrderController::class, 'rejectOrder']);
     Route::post('orders/update-time', [OrderController::class, 'updatePreparationTime']);
     Route::post('orders/ready-shipping', [OrderController::class, 'readyForShipping']);
@@ -180,11 +198,14 @@ Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
     Route::post('addresses/{id}/default', [BuyerController::class, 'setDefaultAddress']);
     Route::get('wallet/deposit-requests', [PaymentController::class, 'depositRequests']);
     Route::post('wallet/deposit-requests', [PaymentController::class, 'requestDeposit']);
-    Route::get('cart', [BuyerController::class, 'cart']);
-    Route::post('cart/add', [BuyerController::class, 'addCart']);
-    Route::put('cart/update/{id}', [BuyerController::class, 'updateCart']);
-    Route::delete('cart/remove/{id}', [BuyerController::class, 'removeCart']);
-    Route::delete('cart/clear', [BuyerController::class, 'clearCart']);
+    Route::get('cart', [CartController::class, 'getCart']);
+    Route::post('cart/add', [CartController::class, 'addToCart']);
+    Route::put('cart/update/{id}', [CartController::class, 'updateQty']);
+    Route::delete('cart/remove/{id}', [CartController::class, 'removeItem']);
+    Route::delete('cart/clear', [CartController::class, 'clearCart']);
+    Route::get('cart/shipping/{sellerId}', [CartController::class, 'getShippingOptions']);
+    Route::post('checkout', [CartController::class, 'checkout']);
+    Route::get('orders', [OrderController::class, 'index']);
     Route::get('favorites', [BuyerController::class, 'favorites']);
     Route::post('favorites/{id}/toggle', [BuyerController::class, 'toggleFavorite']);
     Route::post('reviews', [BuyerController::class, 'addProductReview']);

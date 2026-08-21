@@ -11,6 +11,9 @@ class OrderItem extends Model
         'product_id',
         'variant_id',
         'quantity',
+        'unit_price',
+        'total_price',
+        // Legacy order rows used `price`; keep it assignable for compatibility.
         'price',
     ];
 

@@ -12,8 +12,13 @@ class Transaction extends Model
     // الحقول المسموح بتعبئتها
     protected $fillable = [
         'user_id',
+        'counterparty_user_id',
         'order_id',
         'type',
+        'direction',
+        'status',
+        'reference',
+        'account_type',
         'amount',
         'description',
     ];
@@ -23,6 +28,11 @@ class Transaction extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function counterparty()
+    {
+        return $this->belongsTo(User::class, 'counterparty_user_id');
     }
 
     public function order()

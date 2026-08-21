@@ -9,6 +9,9 @@ use App\Models\PayoutRequest;
 use App\Models\Product;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Models\WalletDepositRequest;
+use App\Services\WalletService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use App\Jobs\SendAdNotification;
 use Illuminate\Support\Facades\Storage; // 🔥 أضف هذا السطر
@@ -109,20 +112,103 @@ class AdminController extends Controller
             return response()->json(['message' => 'Funds can only be added to buyer accounts.'], 400);
         }
 
-        $buyer->balance += $request->amount;
-        $buyer->save();
+        DB::transaction(function () use ($buyer, $request, $admin) {
+            $buyer = User::whereKey($buyer->id)->lockForUpdate()->firstOrFail();
+            app(WalletService::class)->credit($buyer, (float) $request->amount, [
+                'type' => 'deposit',
+                'reference' => 'admin_deposit:' . $admin->id . ':' . uniqid(),
+                'description' => 'Wallet topped up by Admin: ' . $admin->first_name . ' ' . $admin->last_name,
+            ]);
+        });
 
-        Transaction::create([
-            'user_id' => $buyer->id,
-            'type' => 'deposit',
-            'amount' => $request->amount,
-            'description' => 'Wallet topped up by Admin: ' . $admin->first_name . ' ' . $admin->last_name
-        ]);
+        $buyer->refresh();
 
         return response()->json([
             'message' => 'Balance topped up successfully for ' . $buyer->first_name,
             'new_balance' => $buyer->balance
         ]);
+    }
+
+    public function depositRequests()
+    {
+        return response()->json([
+            'success' => true,
+            'data' => WalletDepositRequest::with('user:id,first_name,last_name,email,phone,role')->latest()->get(),
+        ]);
+    }
+
+    public function approveDeposit($id)
+    {
+        $admin = auth()->user();
+        return DB::transaction(function () use ($id, $admin) {
+            $deposit = WalletDepositRequest::whereKey($id)->lockForUpdate()->firstOrFail();
+            if ($deposit->status === 'completed') {
+                return response()->json(['success' => false, 'message' => 'Deposit request has already been reviewed.'], 409);
+            }
+            if (! in_array($deposit->status, ['pending', 'approved'], true)) {
+                return response()->json(['success' => false, 'message' => 'Deposit request is not approvable.'], 409);
+            }
+            $user = User::whereKey($deposit->user_id)->lockForUpdate()->firstOrFail();
+            $this->walletCredit($user, (float) $deposit->amount, "deposit:{$deposit->id}", "Approved deposit request #{$deposit->id}");
+            $deposit->update(['status' => 'completed', 'reviewed_at' => now(), 'reviewed_by_admin_id' => $admin->id]);
+            return response()->json(['success' => true, 'message' => 'Deposit approved.', 'data' => $deposit->fresh(), 'wallet' => app(WalletService::class)->summary($user->fresh())]);
+        });
+    }
+
+    public function rejectDeposit(Request $request, $id)
+    {
+        $admin = auth()->user();
+        $data = $request->validate(['admin_note' => 'nullable|string|max:500']);
+        return DB::transaction(function () use ($id, $admin, $data) {
+            $deposit = WalletDepositRequest::whereKey($id)->lockForUpdate()->firstOrFail();
+            if ($deposit->status !== 'pending') return response()->json(['success' => false, 'message' => 'Deposit request has already been reviewed.'], 409);
+            $deposit->update(['status' => 'rejected', 'admin_note' => $data['admin_note'] ?? null, 'reviewed_at' => now(), 'reviewed_by_admin_id' => $admin->id]);
+            return response()->json(['success' => true, 'message' => 'Deposit rejected.', 'data' => $deposit->fresh()]);
+        });
+    }
+
+    public function withdrawalRequests()
+    {
+        return response()->json(['success' => true, 'data' => PayoutRequest::with('user:id,first_name,last_name,email,phone,role')->latest()->get()]);
+    }
+
+    public function approveWithdrawal($id)
+    {
+        $admin = auth()->user();
+        return DB::transaction(function () use ($id, $admin) {
+            $payout = PayoutRequest::whereKey($id)->lockForUpdate()->firstOrFail();
+            if ($payout->status !== 'pending') return response()->json(['success' => false, 'message' => 'Withdrawal request has already been reviewed.'], 409);
+            $reservation = Transaction::where('reference', "withdrawal:{$payout->id}:reservation")->lockForUpdate()->first();
+            if ($reservation) {
+                $reservation->update(['status' => 'completed']);
+            } else {
+                $user = User::whereKey($payout->user_id)->lockForUpdate()->firstOrFail();
+                app(WalletService::class)->debitAvailable($user, (float) $payout->amount, ['type' => 'withdrawal', 'reference' => "withdrawal:{$payout->id}:completed", 'description' => "Approved withdrawal #{$payout->id}"]);
+            }
+            $payout->update(['status' => 'completed', 'reviewed_at' => now(), 'reviewed_by_admin_id' => $admin->id]);
+            return response()->json(['success' => true, 'message' => 'Withdrawal approved.', 'data' => $payout->fresh()]);
+        });
+    }
+
+    public function rejectWithdrawal(Request $request, $id)
+    {
+        $admin = auth()->user();
+        $data = $request->validate(['admin_notes' => 'nullable|string|max:500']);
+        return DB::transaction(function () use ($id, $admin, $data) {
+            $payout = PayoutRequest::whereKey($id)->lockForUpdate()->firstOrFail();
+            if ($payout->status !== 'pending') return response()->json(['success' => false, 'message' => 'Withdrawal request has already been reviewed.'], 409);
+            $user = User::whereKey($payout->user_id)->lockForUpdate()->firstOrFail();
+            $reservation = Transaction::where('reference', "withdrawal:{$payout->id}:reservation")->lockForUpdate()->first();
+            if ($reservation) $reservation->update(['status' => 'rejected']);
+            app(WalletService::class)->unlockToAvailable($user, (float) $payout->amount, ['type' => 'refund', 'reference' => "withdrawal:{$payout->id}:refund", 'description' => "Released rejected withdrawal #{$payout->id}"]);
+            $payout->update(['status' => 'rejected', 'admin_notes' => $data['admin_notes'] ?? null, 'reviewed_at' => now(), 'reviewed_by_admin_id' => $admin->id]);
+            return response()->json(['success' => true, 'message' => 'Withdrawal rejected and funds returned.', 'data' => $payout->fresh(), 'wallet' => app(WalletService::class)->summary($user->fresh())]);
+        });
+    }
+
+    private function walletCredit(User $user, float $amount, string $reference, string $description): void
+    {
+        app(WalletService::class)->credit($user, $amount, ['type' => 'deposit', 'reference' => $reference, 'description' => $description]);
     }
 
     // ============================================================

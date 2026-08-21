@@ -2,377 +2,322 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Invoice;
 use App\Models\Order;
+use App\Models\SubOrder;
 use App\Models\Transaction;
+use App\Models\User;
 use App\Services\InvoiceService;
 use App\Services\PushNotificationService;
+use App\Services\PriceCalculationService;
 use App\Services\TaxService;
-use DB;
-use Hash;
+use App\Services\WalletService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+use RuntimeException;
 
 class PaymentController extends Controller
 {
-    // 1. عرض الرصيد الحالي للمشتري فقط
+    public function __construct(private WalletService $wallet, private PriceCalculationService $prices)
+    {
+    }
+
     public function getWalletBalance()
     {
         $user = auth()->user();
-        if ($user->role !== 'buyer') {
-            return response()->json(['message' => 'Unauthorized.'], 403);
-        }
-        return response()->json(['balance' => $user->balance]);
+        $this->wallet->reconcileApprovedDeposits($user);
+        return response()->json($this->wallet->summary($user->fresh()));
     }
 
     public function requestDeposit(Request $request)
     {
-        $user = auth()->user();
-        abort_if($user->role !== 'buyer', 403);
         $data = $request->validate([
-            'amount' => 'required|numeric|min:1',
+            'amount' => 'required|numeric|min:0.01',
             'payment_method' => 'nullable|string|max:50',
             'reference' => 'nullable|string|max:255',
         ]);
-        $id = DB::table('wallet_deposit_requests')->insertGetId([
-            'user_id' => $user->id, 'amount' => $data['amount'],
+
+        $deposit = auth()->user()->walletDepositRequests()->create([
+            'amount' => round((float) $data['amount'], 2),
             'payment_method' => $data['payment_method'] ?? 'manual',
-            'reference' => $data['reference'] ?? null, 'status' => 'pending',
-            'created_at' => now(), 'updated_at' => now(),
+            'reference' => $data['reference'] ?? null,
+            'status' => 'pending',
         ]);
-        return response()->json(['success' => true, 'message' => 'Deposit request submitted for admin approval.', 'data' => DB::table('wallet_deposit_requests')->find($id)], 201);
+
+        return response()->json(['success' => true, 'message' => 'Deposit request submitted for admin approval.', 'data' => $deposit], 201);
     }
 
     public function depositRequests()
     {
-        abort_if(auth()->user()->role !== 'buyer', 403);
-        return response()->json(['success' => true, 'data' => DB::table('wallet_deposit_requests')->where('user_id', auth()->id())->latest()->get()]);
+        return response()->json(['success' => true, 'data' => auth()->user()->walletDepositRequests()->latest()->get()]);
     }
 
-    // public function payAndTransfer(Request $request, $orderId)
-    // {
-    //    $user = auth()->user();
-
-    // 1. التحقق من الصلاحية ووجود الطلب
-    //  if ($user->role !== 'buyer') {
-    //    return response()->json(['message' => 'Unauthorized.Only buyers can perform this action.'], 403);
-    //   }
-
-    // $order = Order::with('seller')->where('id', $orderId)
-    //   ->where('user_id', $user->id)
-    // ->firstOrFail();
-
-    // منع الدفع المتكرر
-    //  if (in_array($order->status, ['paid', 'delivered'])) {
-    //    return response()->json(['message' => 'Order already processed.'], 400);
-    //   }
-
-    // 2. التحقق من كلمة المرور وكفاية الرصيد
-    // $request->validate(['password' => 'required']);
-    //  if (!Hash::check($request->password, $user->password)) {
-    //    return response()->json(['message' => 'Incorrect password.'], 401);
-    //  }
-
-    //   if ($user->balance < $order->total_price) {
-    //     return response()->json(['message' => 'Insufficient balance.'], 400);
-    //   }
-
-    // 3. العملية المالية المدمجة
-    // return DB::transaction(function () use ($user, $order) {
-
-    // أ. خصم من المشتري
-    //   $user->decrement('balance', $order->total_price);
-
-    // ب. حساب العمولات فوراً
-    // $seller = $order->seller;
-    //   $totalAmount = $order->total_price;
-    //   $commissionRate = ($seller->role === 'wholesale') ? 0.05 : 0.10;
-    //   $adminCommission = $totalAmount * $commissionRate;
-    //   $sellerProfit = $totalAmount - $adminCommission;
-
-    // ج. إضافة الرصيد للبائع وتحديث حالة الطلب
-    //    $seller->increment('balance', $sellerProfit);
-    //    $order->update(['status' => 'delivered']); // تحول لـ delivered مباشرة
-
-    // د. تسجيل العمليات (سجل للمشتري وسجل للبائع)
-    // سجل المشتري (Payment)
-    //    Transaction::create([
-    //        'user_id' => $user->id,
-    //        'order_id' => $order->id,
-    //        'type' => 'payment',
-    //        'amount' => $totalAmount,
-    //        'description' => "Paid for Order #{$order->id}"
-    //    ]);
-
-    // سجل البائع (Earnings)
-    //    Transaction::create([
-    //        'user_id' => $seller->id,
-    //        'order_id' => $order->id,
-    //       'type' => 'deposit',
-    //     'amount' => $sellerProfit,
-    //      'description' => "Earnings from Order #{$order->id} (Auto-transfer)"
-    //   ]);
-
-    // return response()->json([
-    //   'message' => 'Payment successful and funds transferred to seller.',
-    //     'new_balance' => $user->balance,
-    //     'order_status' => 'delivered'
-    //   ], 200);
-    //  });
-    //  }
-
-
-
-
-
-
-    /*     public function payAndTransfer(Request $request, $orderId)
-        {
-            $user = auth()->user();
-
-            // 1. التحقق من الصلاحية ووجود الطلب
-            if ($user->role !== 'buyer') {
-                return response()->json(['message' => 'Unauthorized. Only buyers can perform this action.'], 403);
-            }
-
-            // جلب الطلب مع البائع والمنتجات المرتبطة به من الجدول الوسيط
-            $order = Order::with(['seller', 'products'])->where('id', $orderId)
-                ->where('user_id', $user->id)
-                ->firstOrFail();
-
-            // منع الدفع المتكرر
-            if (in_array($order->status, ['paid', 'delivered'])) {
-                return response()->json(['message' => 'Order already processed.'], 400);
-            }
-
-            // 2. التحقق من كلمة المرور وكفاية الرصيد
-            $request->validate(['password' => 'required']);
-            if (!Hash::check($request->password, $user->password)) {
-                return response()->json(['message' => 'Incorrect password.'], 401);
-            }
-
-            if ($user->balance < $order->total_price) {
-                return response()->json(['message' => 'Insufficient balance.'], 400);
-            }
-
-            // 3. العملية المالية المدمجة
-            return DB::transaction(function () use ($user, $order) {
-
-                // أ. خصم من المشتري
-                $user->decrement('balance', $order->total_price);
-
-                // ب. حساب العمولات فوراً
-                $seller = $order->seller;
-                $totalAmount = $order->total_price;
-                $commissionRate = ($seller->role === 'wholesale') ? 0.05 : 0.10;
-                $adminCommission = $totalAmount * $commissionRate;
-                $sellerProfit = $totalAmount - $adminCommission;
-
-                // ج. إضافة الرصيد للبائع وتحديث حالة الطلب
-                $seller->increment('balance', $sellerProfit);
-                $order->update(['status' => 'delivered']); // تحول لـ delivered (استلام البائع للمال)
-
-                // -----------------------------------------------------------
-                // د. المرور على جميع منتجات الطلب وزيادة عداد الـ sales_count
-                // -----------------------------------------------------------
-                foreach ($order->products as $product) {
-                    // نصل للكمية المخزنة في الجدول الوسيط عبر الـ pivot
-                    $quantity = $product->pivot->quantity;
-
-                    // زيادة العداد للمنتج الحالي بناءً على كميته بالطلب
-                    $product->increment('sales_count', $quantity);
-                }
-                // -----------------------------------------------------------
-
-                // هـ. تسجيل العمليات في جدول الترانزاكشنز
-                Transaction::create([
-                    'user_id' => $user->id,
-                    'order_id' => $order->id,
-                    'type' => 'payment',
-                    'amount' => $totalAmount,
-                    'description' => "Paid for Order #{$order->id}"
-                ]);
-
-                Transaction::create([
-                    'user_id' => $seller->id,
-                    'order_id' => $order->id,
-                    'type' => 'deposit',
-                    'amount' => $sellerProfit,
-                    'description' => "Earnings from Order #{$order->id} (Auto-transfer)"
-                ]);
-
-                return response()->json([
-                    'message' => 'Payment successful, funds transferred, and sales count updated for all items.',
-                    'new_balance' => $user->balance,
-                    'order_status' => 'delivered'
-                ], 200);
-            });
-        }
-     */
-
-
-
-    // ==============================================================
-    // 🔥 الدفع والحجز: المشتري يدفع والطلب ما زال pending والأموال تُحجز
-    // ==============================================================
-    public function payAndTransfer(Request $request, $orderId)
-    {
-        $user = auth()->user();
-
-        if ($user->role !== 'buyer') {
-            return response()->json(['message' => 'Unauthorized.'], 403);
-        }
-
-        $order = Order::with(['subOrders.seller'])
-            ->where('id', $orderId)
-            ->where('user_id', $user->id)
-            ->where('status', 'pending')
-            ->where('payment_status', 'unpaid')
-            ->firstOrFail();
-
-        $request->validate(['password' => 'required']);
-        if (!Hash::check($request->password, $user->password)) {
-            return response()->json(['message' => 'Incorrect password.'], 401);
-        }
-
-        if ($user->balance < $order->total_price) {
-            return response()->json(['message' => 'Insufficient balance.'], 400);
-        }
-
-        return DB::transaction(function () use ($user, $order) {
-            $totalAmount = (float) $order->total_price;
-            $user->decrement('balance', $totalAmount);
-
-            $taxService = app(TaxService::class);
-            $adminCommission = 0.0;
-            $commissionRate = 0.0;
-
-            foreach ($order->subOrders as $subOrder) {
-                $seller = $subOrder->seller;
-                if (!$seller) {
-                    continue;
-                }
-
-                $subTotal = (float) $subOrder->total;
-                $commissionResult = $taxService->calculateCommission($totalAmount, $seller->role, $order->id);
-                $sellerProfit = $commissionResult['net'];
-                $adminCommission += $commissionResult['commission'];
-                $commissionRate = max($commissionRate, $commissionResult['rate']);
-
-                $seller->increment('balance', $sellerProfit);
-
-                Transaction::create([
-                    'user_id' => $seller->id,
-                    'order_id' => $order->id,
-                    'type' => 'deposit',
-                    'amount' => $sellerProfit,
-                    'description' => "Escrow earnings from SubOrder #{$subOrder->id} (Order #{$order->id})",
-                ]);
-            }
-
-            $order->update([
-                'payment_status' => 'paid_escrow',
-                'platform_commission' => round($adminCommission, 2),
-                'commission_rate_snapshot' => $commissionRate,
-            ]);
-
-            Transaction::create([
-                'user_id' => $user->id,
-                'order_id' => $order->id,
-                'type' => 'payment',
-                'amount' => $totalAmount,
-                'description' => "Paid for Order #{$order->id} (Held in Escrow)",
-            ]);
-
-            app(PushNotificationService::class)->sendToUser(
-                $user->fresh(),
-                'Order Confirmed',
-                "Your order #{$order->id} was paid successfully.",
-                ['type' => 'order_confirmed', 'order_id' => (string) $order->id]
-            );
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Payment successful. Funds locked in escrow until delivery confirmation.',
-                'new_balance' => $user->fresh()->balance,
-                'order_id' => $order->id,
-                'order_number' => '#' . str_pad((string) $order->id, 6, '0', STR_PAD_LEFT),
-                'order_status' => 'pending',
-                'payment_status' => 'paid_escrow',
-                'commission_rate' => $commissionRate,
-                'platform_commission' => round($adminCommission, 2),
-            ], 200);
-        });
-    }
-    // 4. عرض سجل العمليات (كشف الحساب) للمشتري
     public function getTransactionHistory()
     {
-        $user = auth()->user();
-
-        // 1. التأكد من الصلاحيات (مشتري أو بائع)
-        if ($user->role !== 'buyer' && $user->role !== 'vendor' && $user->role !== 'wholesale') {
-            return response()->json(['message' => 'Unauthorized.'], 403);
-        }
-
-        // 2. جلب سجل الحركات المالية
-        $history = $user->transactions()
-            ->with('order:id,status,created_at') // جلب حقول محددة من الطلب
-            ->latest()
-            ->get();
-
-        if ($history->isEmpty()) {
-            return response()->json(['message' => 'No transactions found.'], 200);
-        }
-
-        return response()->json([
-            'message' => 'Transaction history retrieved successfully.',
-            'data' => $history
-        ], 200);
-    }
-
-    // 🔥 زر تأكيد الاستلام الفوري عند المشتري وتحرير الأموال
-    // ==============================================================
-    public function confirmDelivery($orderId)
-    {
-        $user = auth()->user();
-
-        // يجب أن يكون المستدعي هو صاحب الطلب (المشتري)
-        $order = Order::with('seller')->where('id', $orderId)
-            ->where('user_id', $user->id)
-            ->where('status', 'shipped')
-            ->firstOrFail();
-
-        DB::transaction(function () use ($order) {
-            $timeline = $order->status_timeline ?? [];
-            $timeline[] = [
-                'status' => 'delivered',
-                'title' => 'Buyer confirmed delivery. Funds unlocked successfully.',
-                'time' => now()->toDateTimeString()
-            ];
-
-            // تحويل حالة الطلب إلى delivered والدفع إلى مكتمل تماماً
-            $order->update([
-                'status' => 'delivered',
-                'payment_status' => 'released',
-                'delivered_at' => now(),
-                'status_timeline' => $timeline
-            ]);
-
-            // 🔥 توليد الفواتير باستخدام InvoiceService
-            $invoiceService = app(InvoiceService::class);
-
-            // فاتورة ضريبية: wholesale فقط
-            $invoiceService->generateOrderInvoice($order);
-
-            // فاتورة عمولة المنصة: لكل التجار (vendor + wholesale)
-            $invoiceService->generateCommissionInvoice($order);
-        });
-
+        $transactions = auth()->user()->transactions()->with('order:id,status,created_at')->latest()->paginate(100);
         return response()->json([
             'success' => true,
-            'message' => 'Delivery confirmed. Funds have been completely released to the seller.',
-            'order_status' => 'delivered'
+            'data' => $transactions->items(),
+            'meta' => ['current_page' => $transactions->currentPage(), 'last_page' => $transactions->lastPage(), 'total' => $transactions->total()],
         ]);
     }
 
+    public function transfer(Request $request)
+    {
+        $data = $request->validate([
+            'recipient_token' => 'required|string|max:120',
+            'amount' => 'required|numeric|min:0.01',
+            'idempotency_key' => 'nullable|string|max:100',
+        ]);
+        $senderId = auth()->id();
+        $amount = round((float) $data['amount'], 2);
+        $key = $data['idempotency_key'] ?? (string) Str::uuid();
+        $outReference = "transfer:{$senderId}:{$key}:out";
 
+        try {
+            return DB::transaction(function () use ($data, $senderId, $amount, $key, $outReference) {
+                $sender = $this->wallet->lockUser($senderId);
+                $existing = Transaction::where('reference', $outReference)->first();
+                if ($existing) {
+                    return response()->json(['success' => true, 'message' => 'Transfer already processed.', 'duplicate' => true, 'data' => $existing]);
+                }
+                $recipient = User::where('wallet_qr_token', $data['recipient_token'])
+                    ->whereIn('role', ['buyer', 'vendor', 'wholesale'])->lockForUpdate()->first();
+                if (! $recipient) {
+                    throw ValidationException::withMessages(['recipient_token' => 'Recipient wallet was not found.']);
+                }
+                if ($recipient->id === $sender->id) {
+                    throw ValidationException::withMessages(['recipient_token' => 'You cannot transfer money to yourself.']);
+                }
+
+                $this->wallet->debitAvailable($sender, $amount, [
+                    'type' => 'transfer_out', 'counterparty_user_id' => $recipient->id,
+                    'reference' => $outReference, 'description' => "Transfer to {$recipient->first_name} {$recipient->last_name}",
+                ]);
+                $this->wallet->credit($recipient, $amount, [
+                    'type' => 'transfer_in', 'counterparty_user_id' => $sender->id,
+                    'reference' => "transfer:{$senderId}:{$key}:in", 'description' => "Transfer from {$sender->first_name} {$sender->last_name}",
+                ]);
+
+                return response()->json([
+                    'success' => true, 'message' => 'Transfer completed successfully.',
+                    'recipient' => $recipient->only(['id', 'first_name', 'last_name', 'store_name']),
+                    'wallet' => $this->wallet->summary($sender->fresh()),
+                ]);
+            });
+        } catch (ValidationException $e) {
+            throw $e;
+        } catch (RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    public function recipients(Request $request)
+    {
+        $query = trim((string) $request->query('query', ''));
+        if (mb_strlen($query) < 2) return response()->json(['success' => true, 'data' => []]);
+        $users = User::whereIn('role', ['buyer', 'vendor', 'wholesale'])
+            ->where(fn ($q) => $q->where('first_name', 'like', "%{$query}%")->orWhere('last_name', 'like', "%{$query}%")->orWhere('phone', 'like', "%{$query}%")->orWhere('email', 'like', "%{$query}%"))
+            ->limit(20)->get(['id', 'first_name', 'last_name', 'store_name', 'wallet_qr_token'])
+            ->map(fn (User $user) => ['id' => $user->id, 'first_name' => $user->first_name, 'last_name' => $user->last_name, 'store_name' => $user->store_name, 'wallet_token' => $user->wallet_qr_token]);
+        return response()->json(['success' => true, 'data' => $users]);
+    }
+
+    public function myWalletQr()
+    {
+        $token = $this->wallet->ensureQrToken(auth()->user());
+        return response()->json([
+            'success' => true, 'type' => 'wallet',
+            // Wallet QR contains only the opaque wallet token. The backend
+            // still determines the wallet and never trusts a client amount.
+            'payload' => $token,
+        ]);
+    }
+
+    public function resolveQr(Request $request)
+    {
+        $request->validate(['payload' => 'required|string|max:1000']);
+        $rawPayload = trim($request->string('payload')->toString());
+        $payload = json_decode($rawPayload, true);
+        if (is_array($payload) && ($payload['type'] ?? null) === 'wallet') {
+            $payload = ['type' => 'wallet', 'token' => $payload['token'] ?? null];
+        } elseif (preg_match('/^[0-9a-fA-F-]{36}$/', $rawPayload)) {
+            // Backward-compatible support for the new compact Wallet QR.
+            $payload = ['type' => 'wallet', 'token' => $rawPayload];
+        }
+        if (! is_array($payload) || empty($payload['type']) || empty($payload['token'])) {
+            return response()->json(['success' => false, 'message' => 'Invalid QR code.'], 422);
+        }
+
+        if ($payload['type'] === 'wallet') {
+            $user = User::where('wallet_qr_token', $payload['token'])->first();
+            if (! $user || ! in_array($user->role, ['buyer', 'vendor', 'wholesale'], true)) {
+                return response()->json(['success' => false, 'message' => 'Wallet QR code is not valid.'], 404);
+            }
+            return response()->json([
+                'success' => true, 'type' => 'wallet',
+                'recipient' => ['id' => $user->id, 'name' => trim($user->first_name . ' ' . $user->last_name), 'store_name' => $user->store_name, 'wallet_token' => $user->wallet_qr_token],
+            ]);
+        }
+
+        if ($payload['type'] === 'order_payment') {
+            $order = Order::with(['seller', 'subOrders.seller'])->where('payment_qr_token', $payload['token'])->first();
+            if (! $order) return response()->json(['success' => false, 'message' => 'Order payment QR code is not valid.'], 404);
+            if ($order->payment_status !== 'unpaid') return response()->json(['success' => false, 'message' => 'This order has already been paid or closed.'], 409);
+            $seller = $order->seller ?: $order->subOrders->first()?->seller;
+            return response()->json([
+                'success' => true, 'type' => 'order_payment',
+                'order' => ['id' => $order->id, 'number' => '#' . str_pad((string) $order->id, 6, '0', STR_PAD_LEFT), 'amount' => (float) $order->total_price, 'payment_status' => $order->payment_status, 'store_name' => $seller?->store_name ?: trim(($seller?->first_name ?? '') . ' ' . ($seller?->last_name ?? ''))],
+            ]);
+        }
+        return response()->json(['success' => false, 'message' => 'Unsupported QR type.'], 422);
+    }
+
+    public function generateOrderPaymentQr($orderId)
+    {
+        $order = Order::with('subOrders')->findOrFail($orderId);
+        $allowed = (int) $order->seller_id === (int) auth()->id() || $order->subOrders->contains(fn ($sub) => (int) $sub->seller_id === (int) auth()->id());
+        abort_unless($allowed, 403);
+        if ($order->payment_status !== 'unpaid') return response()->json(['success' => false, 'message' => 'Only unpaid orders can have a payment QR.'], 409);
+        $order->payment_qr_token = $order->payment_qr_token ?: (string) Str::uuid();
+        $order->save();
+        return response()->json(['success' => true, 'type' => 'order_payment', 'payload' => json_encode(['type' => 'order_payment', 'token' => $order->payment_qr_token], JSON_UNESCAPED_SLASHES), 'order_id' => $order->id]);
+    }
+
+    public function generateSubOrderPaymentQr($subOrderId)
+    {
+        $subOrder = SubOrder::whereKey($subOrderId)->firstOrFail();
+        abort_unless((int) $subOrder->seller_id === (int) auth()->id(), 403);
+        return $this->generateOrderPaymentQr($subOrder->order_id);
+    }
+
+    public function payAndTransfer(Request $request, $orderId)
+    {
+        $request->validate(['password' => 'nullable|string']);
+        $buyerId = auth()->id();
+        try {
+            return DB::transaction(function () use ($request, $orderId, $buyerId) {
+                $buyer = $this->wallet->lockUser($buyerId);
+                if ($buyer->role !== 'buyer') abort(403, 'Only buyers can pay orders.');
+                if ($request->filled('password') && ! \Hash::check($request->password, $buyer->password)) return response()->json(['success' => false, 'message' => 'Incorrect password.'], 401);
+                $order = Order::with(['subOrders.seller', 'subOrders.items', 'products'])
+                    ->whereKey($orderId)->where('user_id', $buyer->id)->lockForUpdate()->first();
+                if (! $order) return response()->json(['success' => false, 'message' => 'Order not found.'], 404);
+                if ($order->payment_status !== 'unpaid') return response()->json(['success' => false, 'message' => 'Order payment has already been processed.'], 409);
+                if ($order->shipping_pending || $order->subOrders->contains(fn ($sub) => $sub->shipping_cost === null)) {
+                    return response()->json(['success' => false, 'message' => 'Shipping cost is not set by all sellers yet.'], 422);
+                }
+
+                foreach ($order->subOrders as $subOrder) {
+                    foreach ($subOrder->items as $lineItem) {
+                        $product = \App\Models\Product::whereKey($lineItem->product_id)->lockForUpdate()->first();
+                        $variant = $lineItem->variant_id
+                            ? \App\Models\ProductVariant::whereKey($lineItem->variant_id)->lockForUpdate()->first()
+                            : null;
+                        if (! $product || $product->status !== 'active') {
+                            throw new RuntimeException('A product in this order is no longer available.');
+                        }
+                        $quote = $this->prices->quote($product, (int) $lineItem->quantity, $variant);
+                        if (abs((float) $lineItem->unit_price - (float) $quote['unit_price']) > 0.009) {
+                            throw new RuntimeException('A product price changed. Please review the order before paying.');
+                        }
+                    }
+                }
+
+                $amount = round((float) $order->total_price, 2);
+                $this->wallet->hold($buyer, $amount, ['order_id' => $order->id, 'type' => 'escrow_hold', 'reference' => "order:{$order->id}:escrow_hold", 'description' => "Funds held in escrow for Order #{$order->id}"]);
+
+                // Legacy seller-created orders do not reserve stock until the
+                // buyer actually pays. Cart checkout already marks this flag
+                // and therefore never decrements stock twice.
+                if (! $order->stock_reserved) {
+                    $lineItems = $order->subOrders->flatMap(fn ($sub) => $sub->items);
+                    if ($lineItems->isNotEmpty()) {
+                        foreach ($lineItems as $lineItem) {
+                            $stock = $lineItem->variant_id
+                                ? \App\Models\ProductVariant::whereKey($lineItem->variant_id)->lockForUpdate()->first()
+                                : \App\Models\Product::whereKey($lineItem->product_id)->lockForUpdate()->first();
+                            if (! $stock || (int) $stock->quantity < (int) $lineItem->quantity) {
+                                throw new RuntimeException('Insufficient stock for a product in this order.');
+                            }
+                            $stock->decrement('quantity', (int) $lineItem->quantity);
+                            $product = \App\Models\Product::whereKey($lineItem->product_id)->lockForUpdate()->first();
+                            $product?->increment('sales_count', (int) $lineItem->quantity);
+                        }
+                    } else {
+                        foreach ($order->products as $product) {
+                            $product = \App\Models\Product::whereKey($product->id)->lockForUpdate()->firstOrFail();
+                            $quantity = (int) $product->pivot->quantity;
+                            if ((int) $product->quantity < $quantity) {
+                                throw new RuntimeException('Insufficient stock for a product in this order.');
+                            }
+                            $product->decrement('quantity', $quantity);
+                            $product->increment('sales_count', $quantity);
+                        }
+                    }
+                }
+                $timeline = $order->status_timeline ?? [];
+                $timeline[] = ['status' => 'paid_escrow', 'title' => 'Buyer payment received and held in escrow.', 'time' => now()->toDateTimeString()];
+                $order->update(['payment_status' => 'paid_escrow', 'stock_reserved' => true, 'status_timeline' => $timeline]);
+                foreach ($order->subOrders as $subOrder) {
+                    $subOrder->update(['escrow_amount' => (float) $subOrder->total]);
+                }
+
+                app(PushNotificationService::class)->sendToUser($buyer->fresh(), 'Order Payment Confirmed', "Your payment for order #{$order->id} is held safely in escrow.", ['type' => 'order_confirmed', 'order_id' => (string) $order->id]);
+                return response()->json(['success' => true, 'message' => 'Payment successful. Funds are locked in escrow until delivery confirmation.', 'wallet' => $this->wallet->summary($buyer->fresh()), 'order_id' => $order->id, 'order_number' => '#' . str_pad((string) $order->id, 6, '0', STR_PAD_LEFT), 'order_status' => $order->status, 'payment_status' => 'paid_escrow']);
+            });
+        } catch (RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    public function confirmDelivery($orderId)
+    {
+        $buyerId = auth()->id();
+        try {
+            return DB::transaction(function () use ($orderId, $buyerId) {
+                $buyer = $this->wallet->lockUser($buyerId);
+                $order = Order::whereKey($orderId)->where('user_id', $buyer->id)->lockForUpdate()->first();
+                if (! $order) return response()->json(['success' => false, 'message' => 'Order not found.'], 404);
+                if ($order->payment_status !== 'paid_escrow') return response()->json(['success' => false, 'message' => 'This escrow is already released or is not paid.'], 409);
+                if ($order->status !== 'shipped') return response()->json(['success' => false, 'message' => 'Delivery can only be confirmed after shipment.'], 422);
+
+                $subOrders = $order->subOrders()->get();
+                if ($subOrders->isEmpty() && $order->seller_id) $subOrders = collect([(object) ['id' => null, 'seller_id' => $order->seller_id, 'total' => $order->total_price, 'seller' => User::find($order->seller_id)]]);
+                if ($subOrders->isEmpty()) return response()->json(['success' => false, 'message' => 'Order has no valid seller escrow destination.'], 422);
+                $total = round((float) $order->total_price, 2);
+                $partsTotal = round((float) $subOrders->sum(fn ($sub) => (float) ($sub->total ?? 0)), 2);
+                $allocated = 0.0; $commissionTotal = 0.0; $maxRate = 0.0;
+                $taxService = app(TaxService::class);
+
+                $this->wallet->releaseLocked($buyer, $total, ['order_id' => $order->id, 'type' => 'escrow_release', 'reference' => "order:{$order->id}:escrow_release:buyer", 'description' => "Escrow released from Buyer for Order #{$order->id}"]);
+
+                foreach ($subOrders as $index => $subOrder) {
+                    $seller = $subOrder->seller ?: User::find($subOrder->seller_id);
+                    if (! $seller) throw new RuntimeException('Order seller is missing; escrow release was cancelled.');
+                    $seller = $this->wallet->lockUser($seller->id);
+                    $rawPart = $partsTotal > 0 ? (float) $subOrder->total : 0;
+                    $part = $index === $subOrders->count() - 1 ? round($total - $allocated, 2) : round($total * ($rawPart / max($partsTotal, 0.01)), 2);
+                    $allocated = round($allocated + $part, 2);
+                    $commission = $taxService->calculateCommission($part, $seller->role, $order->id);
+                    $commissionTotal = round($commissionTotal + $commission['commission'], 2); $maxRate = max($maxRate, $commission['rate']);
+                    $this->wallet->credit($seller, $commission['net'], ['order_id' => $order->id, 'type' => 'escrow_release', 'reference' => "order:{$order->id}:seller:{$seller->id}:release", 'description' => "Escrow release from Order #{$order->id}"]);
+                    $this->wallet->record(['user_id' => $seller->id, 'order_id' => $order->id, 'type' => 'commission', 'amount' => $commission['commission'], 'direction' => 'debit', 'reference' => "order:{$order->id}:seller:{$seller->id}:commission", 'description' => "Platform commission for Order #{$order->id}"]);
+                    $this->wallet->record(['user_id' => null, 'account_type' => 'platform', 'order_id' => $order->id, 'type' => 'commission', 'amount' => $commission['commission'], 'direction' => 'credit', 'reference' => "order:{$order->id}:seller:{$seller->id}:platform_commission", 'description' => "Platform commission from Order #{$order->id}"]);
+                    if ($subOrder->id) $subOrder->update(['escrow_amount' => $part, 'commission_rate_snapshot' => $commission['rate'], 'platform_commission' => $commission['commission'], 'seller_net_amount' => $commission['net']]);
+                }
+
+                $timeline = $order->status_timeline ?? [];
+                $timeline[] = ['status' => 'delivered', 'title' => 'Buyer confirmed delivery and escrow was released.', 'time' => now()->toDateTimeString()];
+                $order->update(['status' => 'delivered', 'payment_status' => 'released', 'delivered_at' => now(), 'platform_commission' => $commissionTotal, 'commission_rate_snapshot' => $maxRate, 'status_timeline' => $timeline]);
+                $freshOrder = $order->fresh(['seller']);
+                app(InvoiceService::class)->generateOrderInvoice($freshOrder);
+                app(InvoiceService::class)->generateCommissionInvoice($freshOrder);
+                return response()->json(['success' => true, 'message' => 'Delivery confirmed. Escrow was released to the seller after commission.', 'order_status' => 'delivered', 'payment_status' => 'released', 'commission' => $commissionTotal, 'wallet' => $this->wallet->summary($buyer->fresh())]);
+            });
+        } catch (RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
 }

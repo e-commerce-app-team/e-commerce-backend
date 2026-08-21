@@ -12,105 +12,88 @@ use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\SubOrder;
+use App\Models\Transaction;
 use App\Models\User;
+use App\Services\PriceCalculationService;
 use App\Services\ShippingService;
+use App\Services\WalletService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+use RuntimeException;
 
 class CartController extends Controller
 {
-    public function __construct(private ShippingService $shippingService)
-    {
+    public function __construct(
+        private ShippingService $shippingService,
+        private PriceCalculationService $prices,
+        private WalletService $wallet,
+    ) {
     }
 
-    // 1. تابع التحقق من المشتري فقط (Private Helper)
-    private function assertBuyer()
+    private function assertBuyer(): User
     {
         $user = auth()->user();
-        if (!$user) {
+        if (! $user) {
             abort(response()->json(['message' => 'Unauthenticated'], 401));
         }
         if ($user->role !== 'buyer') {
-            abort(response()->json(['message' => 'Forbidden'], 403));
+            abort(response()->json(['message' => 'Only buyers can use the cart'], 403));
         }
 
         return $user;
     }
 
-    // 2. تابع الإضافة للسلة المنفصل (Public Action)
     public function addToCart(Request $request)
     {
-        // التحقق من الصلاحية وجلب المستخدم
         $user = $this->assertBuyer();
-
-        // التحقق من المدخلات
-        $request->validate([
+        $data = $request->validate([
             'product_id' => 'required|exists:products,id',
             'qty' => 'required|integer|min:1',
             'variant_id' => 'nullable|exists:product_variants,id',
         ]);
 
-        // جلب المنتج
-        $product = Product::findOrFail($request->product_id);
+        $product = Product::with('variants')->findOrFail($data['product_id']);
+        $variant = $this->variantFor($product, $data['variant_id'] ?? null);
+        $item = CartItem::where('user_id', $user->id)
+            ->where('product_id', $product->id)
+            ->where('variant_id', $data['variant_id'] ?? null)
+            ->first();
+        $newQty = (int) ($item?->qty ?? 0) + (int) $data['qty'];
 
-        // التحقق من المخزون (تمرير الـ variant_id أيضاً)
-        if (!$this->validateStock($product, $request->qty, $request->variant_id)) {
-            return response()->json(['message' => 'The requested quantity is not available in stock'], 400);
+        if ($newQty > $this->stockFor($product, $variant)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'The requested quantity is not available in stock.',
+                'max_stock' => $this->stockFor($product, $variant),
+            ], 422);
         }
 
-        // الحفظ أو التحديث في السلة
-        CartItem::updateOrCreate(
-            [
+        if ($item) {
+            $item->update(['qty' => $newQty, 'seller_id' => $product->user_id]);
+        } else {
+            CartItem::create([
                 'user_id' => $user->id,
                 'product_id' => $product->id,
-                'variant_id' => $request->variant_id,
-            ],
-            [
-                'qty' => $request->qty,
+                'variant_id' => $variant?->id,
                 'seller_id' => $product->user_id,
-            ]
-        );
-
-        // تسجيل سلوك إضافة المنتج للسلة
-        try {
-            \App\Models\UserBehavior::create([
-                'user_id' => $user->id,
-                'action' => 'cart',
-                'product_id' => $product->id,
-                'category_id' => $product->department_id,
+                'qty' => $newQty,
             ]);
-        } catch (\Exception $e) {
-            // تجاهل الخطأ لعدم تعطيل الإضافة
         }
 
-        return response()->json(['message' => 'Added to cart successfully']);
+        $this->recordCartBehavior($user, $product);
+        return response()->json(['success' => true, 'message' => 'Product added to cart.'], 201);
     }
 
-    // تابع فحص المخزون المساعد (باستخدام حقل quantity)
-    private function validateStock($product, $qty, $variantId = null)
-    {
-        // 1. إذا كان المنتج يتضمن متغيرات (Variants)
-        if ($variantId) {
-            $variant = ProductVariant::find($variantId);
-            if ($variant) {
-                return $variant->quantity >= $qty;
-            }
-        }
-
-        // 2. الفحص من مخزون المنتج الرئيسي عبر حقل quantity
-        return $product->quantity >= $qty;
-    }
-    // 2. عرض السلة (مجمعة حسب التاجر)
-    /// 1. عرض السلة (مجمعة حسب التاجر)
     public function getCart()
     {
         $user = $this->assertBuyer();
-
-        // جلب عناصر السلة مع التاجر عبر علاقة seller والمنتج والـ Variant إن وجد
         $items = CartItem::where('user_id', $user->id)
-            ->with(['product.seller', 'variant'])
+            ->with(['product.category', 'product.seller', 'variant'])
+            ->orderBy('id')
             ->get();
-
         $groups = $this->buildStoreGroups($items);
 
         return response()->json([
@@ -124,259 +107,434 @@ class CartController extends Controller
         ]);
     }
 
-    // 2. التابع المساعد لتجميع العناصر حسب المتجر/التاجر
-    private function buildStoreGroups($items)
+    private function buildStoreGroups($items): array
     {
         $groups = [];
 
         foreach ($items as $item) {
-            $sellerId = $item->seller_id ?? $item->product->user_id;
-
-            if (!isset($groups[$sellerId])) {
-                // جلب اسم المتجر أو اسم التاجر الحقيقي
-                $seller = $item->product->seller ?? User::find($sellerId);
-                $storeName = $seller->store_name ?? $seller->name ?? ('Store #' . $sellerId);
-
+            $product = $item->product;
+            if (! $product) {
+                continue;
+            }
+            $sellerId = (int) $product->user_id;
+            $seller = $product->seller;
+            if (! isset($groups[$sellerId])) {
                 $groups[$sellerId] = [
                     'seller_id' => $sellerId,
-                    'store_name' => $storeName,
-                    'subtotal' => 0,
+                    'store_name' => $seller?->store_name ?: $this->userName($seller),
+                    'store_logo' => $seller?->store_logo,
+                    'subtotal' => 0.0,
+                    'items_count' => 0,
+                    'has_free_shipping' => false,
                     'items' => [],
+                    'shipping_options' => [],
                 ];
             }
 
-            // فك ترجمة اسم المنتج إذا كان مخزناً كـ JSON
-            $productName = $item->product->name;
-            if (is_string($productName)) {
-                $decoded = json_decode($productName, true);
-                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                    $locale = app()->getLocale(); // اللغّة الحالية للمشروع
-                    $productName = $decoded[$locale] ?? $decoded['ar'] ?? $decoded['en'] ?? reset($decoded);
-                }
-            }
-
-            $price = $item->product->offer_price ?? $item->product->original_price;
-            $itemTotal = $price * $item->qty;
-
-            $groups[$sellerId]['subtotal'] += $itemTotal;
-            $groups[$sellerId]['items'][] = [
-                'id' => $item->id,
-                'product_id' => $item->product_id,
-                'product_name' => $productName,
-                'image' => $item->product->image,
-                'price' => round($price, 2),
-                'qty' => $item->qty,
-                'total_price' => round($itemTotal, 2),
-                'variant' => $item->variant ? [
-                    'id' => $item->variant->id,
-                    'name' => $item->variant->name ?? null,
-                ] : null,
-            ];
+            $quote = $this->prices->quote($product, (int) $item->qty, $item->variant);
+            $groups[$sellerId]['subtotal'] += $quote['line_total'];
+            $groups[$sellerId]['items_count'] += (int) $item->qty;
+            $groups[$sellerId]['has_free_shipping'] = $groups[$sellerId]['has_free_shipping'] || (bool) $product->is_free_shipping;
+            $groups[$sellerId]['items'][] = $this->mapItem($item, $quote);
         }
+
+        foreach ($groups as &$group) {
+            $seller = User::find($group['seller_id']);
+            $group['shipping_options'] = $this->shippingService->getOptionsForSeller(
+                $seller,
+                (float) $group['subtotal'],
+                (bool) $group['has_free_shipping'],
+            );
+            $group['subtotal'] = round($group['subtotal'], 2);
+        }
+        unset($group);
 
         return $groups;
     }
 
     public function getShippingOptions(Request $request, $sellerId)
     {
-        $this->assertBuyer();
-
-        $seller = User::findOrFail($sellerId);
-        $subtotal = (float) $request->query('subtotal', 0);
-        $hasFree = $request->boolean('free_shipping');
+        $user = $this->assertBuyer();
+        $seller = User::whereIn('role', ['vendor', 'wholesale'])->findOrFail($sellerId);
+        $items = CartItem::where('user_id', $user->id)->where('seller_id', $seller->id)
+            ->with(['product.category', 'variant'])->get();
+        $subtotal = $items->sum(fn ($item) => $this->prices->quote($item->product, (int) $item->qty, $item->variant)['line_total']);
+        $hasFree = $items->contains(fn ($item) => (bool) $item->product->is_free_shipping);
 
         return response()->json([
             'success' => true,
-            'data' => $this->shippingService->getOptionsForSeller($seller, $subtotal, $hasFree),
+            'data' => $this->shippingService->getOptionsForSeller($seller, (float) $subtotal, $hasFree),
         ]);
-    }
-
-    public function clearCart()
-    {
-        $user = $this->assertBuyer();
-        CartItem::where('user_id', $user->id)->delete();
-
-        return response()->json(['success' => true, 'message' => 'Cart cleared successfully']);
     }
 
     public function updateQty(Request $request, $id)
     {
         $user = $this->assertBuyer();
-
-        $request->validate(['qty' => 'required|integer|min:1']);
-
-        $item = CartItem::where('id', $id)
-            ->where('user_id', $user->id)
-            ->with(['product', 'variant'])
-            ->first();
-
-        if (!$item) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cart item not found or does not belong to this user'
-            ], 404);
+        $data = $request->validate(['qty' => 'required|integer|min:1']);
+        $item = CartItem::where('id', $id)->where('user_id', $user->id)
+            ->with(['product.category', 'variant'])->first();
+        if (! $item) {
+            return response()->json(['success' => false, 'message' => 'Cart item not found.'], 404);
         }
 
-        // جلب أقصى كمية متوفرة في المخزون
-        $max = $this->availableStock($item);
-
-        if ($request->qty > $max) {
+        $max = $this->stockFor($item->product, $item->variant);
+        if ((int) $data['qty'] > $max) {
             return response()->json([
                 'success' => false,
-                'message' => 'Requested quantity is not available in stock',
+                'message' => 'Requested quantity is not available in stock.',
                 'max_stock' => $max,
-            ], 400);
+            ], 422);
         }
 
-        // تحديث الكمية
-        $item->update(['qty' => $request->qty]);
+        $item->update(['qty' => (int) $data['qty']]);
+        $fresh = $item->fresh(['product.category', 'variant']);
+        return response()->json(['success' => true, 'data' => $this->mapItem($fresh, $this->prices->quote($fresh->product, $fresh->qty, $fresh->variant))]);
+    }
 
+    public function removeItem($id)
+    {
+        $this->assertBuyer();
+        $deleted = CartItem::where('id', $id)->where('user_id', auth()->id())->delete();
+        if (! $deleted) {
+            return response()->json(['success' => false, 'message' => 'Cart item not found.'], 404);
+        }
+        return response()->json(['success' => true, 'message' => 'Product removed successfully.']);
+    }
+
+    public function clearCart()
+    {
+        $this->assertBuyer();
+        CartItem::where('user_id', auth()->id())->delete();
+        return response()->json(['success' => true, 'message' => 'Cart cleared successfully.']);
+    }
+
+    /** Create an order request. Wallet payment starts only after seller shipping quote. */
+    public function checkout(Request $request)
+    {
+        $user = $this->assertBuyer();
+        $request->validate([
+            'address_id' => 'required|integer',
+            'driver_notes' => 'nullable|string|max:1000',
+            'idempotency_key' => 'nullable|string|max:100',
+            'stores' => 'nullable|array',
+            'stores.*.seller_id' => 'required|integer',
+            'stores.*.shipping_option_id' => 'nullable|string|max:40',
+            'stores.*.coupon_code' => 'nullable|string|max:80',
+        ]);
+
+        $key = trim((string) ($request->input('idempotency_key') ?: Str::uuid()));
+
+        try {
+            return DB::transaction(function () use ($request, $user, $key) {
+                $buyer = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+                $existing = Order::where('user_id', $buyer->id)->where('checkout_key', $key)->lockForUpdate()->first();
+                if ($existing) {
+                    return $this->checkoutResponse($existing, true, $buyer);
+                }
+
+                $address = BuyerAddress::where('id', $request->integer('address_id'))
+                    ->where('user_id', $buyer->id)->first();
+                if (! $address) {
+                    throw ValidationException::withMessages(['address_id' => 'The selected delivery address is invalid.']);
+                }
+
+                $cartItems = CartItem::where('user_id', $buyer->id)->lockForUpdate()->get();
+                if ($cartItems->isEmpty()) {
+                    throw ValidationException::withMessages(['cart' => 'Cart is empty.']);
+                }
+
+                $productIds = $cartItems->pluck('product_id')->unique()->values();
+                $products = Product::with('category')->whereIn('id', $productIds)->lockForUpdate()->get()->keyBy('id');
+                $variantIds = $cartItems->pluck('variant_id')->filter()->unique()->values();
+                $variants = $variantIds->isEmpty()
+                    ? collect()
+                    : ProductVariant::whereIn('id', $variantIds)->lockForUpdate()->get()->keyBy('id');
+
+                $prepared = [];
+                $remainingStock = [];
+                foreach ($cartItems as $cartItem) {
+                    $product = $products->get($cartItem->product_id);
+                    if (! $product || $product->status !== 'active') {
+                        throw ValidationException::withMessages(['cart' => 'A product in the cart is no longer available.']);
+                    }
+                    $variant = $cartItem->variant_id ? $variants->get($cartItem->variant_id) : null;
+                    if ($cartItem->variant_id && (! $variant || (int) $variant->product_id !== (int) $product->id || ! $variant->is_active)) {
+                        throw ValidationException::withMessages(['cart' => 'A selected product variant is no longer available.']);
+                    }
+
+                    $stockKey = $variant ? 'variant:' . $variant->id : 'product:' . $product->id;
+                    $remainingStock[$stockKey] ??= $this->stockFor($product, $variant);
+                    if ($remainingStock[$stockKey] < (int) $cartItem->qty) {
+                        throw ValidationException::withMessages(['cart' => "Insufficient stock for product #{$product->id}."]);
+                    }
+                    $remainingStock[$stockKey] -= (int) $cartItem->qty;
+                    $quote = $this->prices->quote($product, (int) $cartItem->qty, $variant);
+                    $prepared[] = compact('cartItem', 'product', 'variant', 'quote');
+                }
+
+                $storeRequests = collect($request->input('stores', []))->keyBy(fn ($store) => (string) ($store['seller_id'] ?? ''));
+                $sellers = collect($prepared)->map(fn ($row) => (int) $row['product']->user_id)->unique()->values();
+                $sellerModels = User::whereIn('id', $sellers)->whereIn('role', ['vendor', 'wholesale'])->get()->keyBy('id');
+                $groups = [];
+                $couponIdsUsed = [];
+
+                foreach ($sellers as $sellerId) {
+                    $seller = $sellerModels->get($sellerId);
+                    if (! $seller) {
+                        throw ValidationException::withMessages(['cart' => 'A seller for this cart is unavailable.']);
+                    }
+                    $rows = collect($prepared)->where(fn ($row) => (int) $row['product']->user_id === (int) $sellerId)->values();
+                    $subtotal = round($rows->sum(fn ($row) => $row['quote']['line_total']), 2);
+                    $baseSubtotal = round($rows->sum(fn ($row) => $row['quote']['base_subtotal']), 2);
+                    $taxAmount = round($rows->sum(fn ($row) => $row['quote']['tax_amount']), 2);
+                    $config = $storeRequests->get((string) $sellerId, []);
+                    $productIdsForCoupon = $rows->map(fn ($row) => (int) $row['product']->id)->unique()->values()->all();
+                    $coupon = null;
+                    $discount = 0.0;
+                    if (! empty($config['coupon_code'])) {
+                        $coupon = Coupon::where('code', strtoupper(trim($config['coupon_code'])))
+                            ->where('seller_id', $sellerId)->lockForUpdate()->first();
+                        if (! $coupon) {
+                            throw ValidationException::withMessages(['coupon' => 'The coupon does not belong to this store.']);
+                        }
+                        $validation = $coupon->isValid($buyer->id, $subtotal, $productIdsForCoupon);
+                        if (! $validation['valid']) {
+                            throw ValidationException::withMessages(['coupon' => $validation['message']]);
+                        }
+                        $discount = round($coupon->calculateDiscount($subtotal), 2);
+                        $couponIdsUsed[] = $coupon->id;
+                    }
+
+                    $hasFreeProduct = $rows->contains(fn ($row) => (bool) $row['product']->is_free_shipping);
+                    $options = $this->shippingService->getOptionsForSeller(
+                        $seller,
+                        $subtotal,
+                        $hasFreeProduct || $coupon?->type === 'free_shipping',
+                    );
+                    $shippingId = (string) ($config['shipping_option_id'] ?? 'standard');
+                    $shipping = $this->shippingService->resolveOption($options, $shippingId);
+                    if (! $shipping) {
+                        throw ValidationException::withMessages(['shipping' => 'The selected shipping option is not available.']);
+                    }
+
+                    $shippingCost = $shipping['cost'] === null ? null : round((float) $shipping['cost'], 2);
+                    $total = round(max(0, $subtotal - $discount + ($shippingCost ?? 0)), 2);
+                    $groups[$sellerId] = compact('seller', 'rows', 'subtotal', 'baseSubtotal', 'taxAmount', 'coupon', 'discount', 'shipping', 'shippingCost', 'total');
+                }
+
+                $total = round(collect($groups)->sum('total'), 2);
+                if ($total <= 0) {
+                    throw ValidationException::withMessages(['payment' => 'The order total must be greater than zero.']);
+                }
+                $firstSellerId = (int) array_key_first($groups);
+                $shippingPending = collect($groups)->contains(fn ($group) => $group['shippingCost'] === null);
+                $mainOrder = Order::create([
+                    'user_id' => $buyer->id,
+                    'seller_id' => $firstSellerId,
+                    'total_price' => $total,
+                    'subtotal_before_tax' => round(collect($groups)->sum('baseSubtotal'), 2),
+                    'tax_amount' => round(collect($groups)->sum('taxAmount'), 2),
+                    'tax_breakdown' => collect($prepared)->map(fn ($row) => [
+                        'product_id' => $row['product']->id,
+                        'quantity' => $row['cartItem']->qty,
+                        'unit_price' => $row['quote']['base_unit_price'],
+                        'tax_rate' => $row['quote']['tax_rate'],
+                        'tax_amount' => $row['quote']['tax_amount'],
+                    ])->values()->all(),
+                    'status' => 'pending',
+                    'payment_method' => 'wallet',
+                    'payment_status' => 'unpaid',
+                    'stock_reserved' => false,
+                    'checkout_key' => $key,
+                    'shipping_pending' => $shippingPending,
+                    'shipping_address_title' => $address->title,
+                    'shipping_address_details' => $address->details,
+                    'address_id' => $address->id,
+                    'shipping_lat' => $address->latitude,
+                    'shipping_lng' => $address->longitude,
+                    'customer_notes' => $request->input('driver_notes') ?: $address->driver_notes,
+                    'discount_amount' => round(collect($groups)->sum('discount'), 2),
+                    'commission_rate_snapshot' => 0,
+                    'platform_commission' => 0,
+                    'status_timeline' => [[
+                        'status' => 'pending',
+                        'title' => 'Order request submitted; waiting for seller shipping quote.',
+                        'time' => now()->toDateTimeString(),
+                    ]],
+                ]);
+
+                $legacyPivot = [];
+                foreach ($groups as $sellerId => $group) {
+                    $subOrder = SubOrder::create([
+                        'order_id' => $mainOrder->id,
+                        'seller_id' => $sellerId,
+                        'total' => $group['total'],
+                        'escrow_amount' => 0,
+                        'shipping_method' => $group['shipping']['id'],
+                        'shipping_label' => $group['shipping']['name'],
+                        'shipping_cost' => $group['shippingCost'],
+                        'estimated_delivery' => $group['shipping']['estimated_delivery'],
+                        'coupon_id' => $group['coupon']?->id,
+                        'discount_amount' => $group['discount'],
+                        'status' => 'pending',
+                    ]);
+
+                    foreach ($group['rows'] as $row) {
+                        $product = $row['product'];
+                        $variant = $row['variant'];
+                        $qty = (int) $row['cartItem']->qty;
+                        $quote = $row['quote'];
+                        OrderItem::create([
+                            'sub_order_id' => $subOrder->id,
+                            'product_id' => $product->id,
+                            'variant_id' => $variant?->id,
+                            'quantity' => $qty,
+                            // Keep the legacy required column in sync with the
+                            // newer unit_price snapshot used by checkout.
+                            'price' => $quote['unit_price'],
+                            'unit_price' => $quote['unit_price'],
+                            'total_price' => $quote['line_total'],
+                        ]);
+
+                        $legacyPivot[$product->id] = [
+                            'quantity' => ($legacyPivot[$product->id]['quantity'] ?? 0) + $qty,
+                            'price' => $quote['unit_price'],
+                        ];
+                    }
+                }
+                $mainOrder->products()->sync($legacyPivot);
+
+                foreach (array_unique($couponIdsUsed) as $couponId) {
+                    $group = collect($groups)->first(fn ($group) => (int) $group['coupon']?->id === (int) $couponId);
+                    $coupon = $group['coupon'];
+                    $discount = $group['discount'];
+                    // Coupon usage is committed only when the buyer pays the final total.
+                }
+
+                CartItem::where('user_id', $buyer->id)->whereIn('id', $cartItems->pluck('id'))->delete();
+                return $this->checkoutResponse($mainOrder, false, $buyer);
+            });
+        } catch (ValidationException $e) {
+            throw $e;
+        } catch (RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            // Never expose an SQL exception to a buyer. The technical detail is
+            // logged for us; the application receives a safe, actionable state.
+            Log::error('Buyer order request could not be created.', [
+                'buyer_id' => $buyer->id,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to submit the order request right now. Please try again.',
+                'message_ar' => 'تعذر إرسال طلبك حاليًا. حاول مرة أخرى.',
+            ], 422);
+        }
+    }
+
+    private function checkoutResponse(Order $order, bool $duplicate = false, ?User $buyer = null)
+    {
+        $order = $order->fresh();
         return response()->json([
             'success' => true,
-            'message' => 'Quantity updated successfully',
-            'data' => $this->mapCartItem($item->fresh(['product', 'variant'])),
-        ]);
+            'duplicate' => $duplicate,
+            'message' => $duplicate ? 'Order request already submitted.' : 'Order request submitted. Waiting for seller shipping cost.',
+            'order_id' => $order->id,
+            'order_number' => '#' . str_pad((string) $order->id, 6, '0', STR_PAD_LEFT),
+            'order_status' => $order->status,
+            'payment_status' => $order->payment_status,
+            'shipping_pending' => (bool) $order->shipping_pending,
+            'total_price' => (float) $order->total_price,
+            'wallet' => $buyer ? $this->wallet->summary($buyer->fresh()) : null,
+        ], $duplicate ? 200 : 201);
     }
 
-    // 2. تابع فحص المخزون المباشر والآمن
-    private function availableStock($item)
+    private function mapItem(CartItem $item, array $quote): array
     {
-        // أ) إذا كان العنصر يحتوي على Variant
-        if ($item->variant_id) {
-            $variant = ProductVariant::find($item->variant_id);
-            if ($variant) {
-                return (int) $variant->quantity;
-            }
-        }
-
-        // ب) الفحص المباشر من جدول المنتجات عبر product_id
-        $product = Product::find($item->product_id);
-
-        return $product ? (int) $product->quantity : 0;
-    }
-
-    // 2. تابع تنسيق مخرجات عنصر السلة (Map Item Response)
-    private function mapCartItem($item)
-    {
-        $price = $item->product->offer_price ?? $item->product->original_price;
-
-        // فك ترجمة اسم المنتج
-        $productName = $item->product->name;
-        if (is_string($productName)) {
-            $decoded = json_decode($productName, true);
-            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                $locale = app()->getLocale();
-                $productName = $decoded[$locale] ?? $decoded['ar'] ?? $decoded['en'] ?? reset($decoded);
-            }
-        }
-
+        $product = $item->product;
+        $name = $this->localized($product->name);
+        $images = is_array($product->images) ? $product->images : [];
         return [
             'id' => $item->id,
             'product_id' => $item->product_id,
-            'product_name' => $productName,
-            'image' => $item->product->image,
-            'price' => round($price, 2),
+            'variant_id' => $item->variant_id,
+            'name' => $name,
+            'product_name' => $name,
+            'image' => $images[0] ?? null,
+            'price' => $quote['unit_price'],
+            'unit_price' => $quote['unit_price'],
+            'original_price' => (float) ($item->variant?->price ?: $product->original_price),
+            'quantity' => (int) $item->qty,
             'qty' => (int) $item->qty,
-            'total_price' => round($price * $item->qty, 2),
-            'variant' => $item->variant ? [
-                'id' => $item->variant->id,
-                'name' => $item->variant->name ?? null,
-            ] : null,
+            'max_stock' => $this->stockFor($product, $item->variant),
+            'is_out_of_stock' => $this->stockFor($product, $item->variant) < (int) $item->qty,
+            'total_price' => $quote['line_total'],
+            'line_total' => $quote['line_total'],
+            'variant' => $item->variant ? ($item->variant->name ?? $item->variant->attributes) : null,
         ];
     }
-    public function removeItem($id)
+
+    private function variantFor(Product $product, $variantId): ?ProductVariant
     {
-        $user = $this->assertBuyer();
-
-        $deleted = CartItem::where('user_id', $user->id)->where('id', $id)->delete();
-        if (!$deleted) {
-            return response()->json(['message' => 'Item not found or already removed'], 404);
+        if (! $variantId) {
+            return null;
         }
-
-        return response()->json(['success' => true, 'message' => 'Product removed successfully']);
+        $variant = ProductVariant::whereKey($variantId)->where('product_id', $product->id)->first();
+        if (! $variant || ! $variant->is_active) {
+            throw ValidationException::withMessages(['variant_id' => 'The selected variant is invalid.']);
+        }
+        return $variant;
     }
 
-        // 5. الـ Checkout (إنشاء الطلبات الفرعية)
-    public function checkout()
+    private function stockFor(Product $product, ?ProductVariant $variant): int
     {
-        return DB::transaction(function () {
-            $user = auth()->user();
-            $items = CartItem::where('user_id', $user->id)->with('product')->get();
+        return (int) ($variant?->quantity ?? $product->quantity ?? 0);
+    }
 
-            if ($items->isEmpty()) {
-                return response()->json(['message' => 'Cart is empty'], 400);
-            }
+    private function localized($value): string
+    {
+        if (is_array($value)) {
+            return (string) ($value[app()->getLocale()] ?? $value['ar'] ?? $value['en'] ?? reset($value));
+        }
+        $decoded = is_string($value) ? json_decode($value, true) : null;
+        if (is_array($decoded)) {
+            return (string) ($decoded[app()->getLocale()] ?? $decoded['ar'] ?? $decoded['en'] ?? reset($decoded));
+        }
+        return (string) $value;
+    }
 
-            $calculateEffectivePrice = function ($item) {
-                $product = $item->product;
+    private function userName(?User $user): string
+    {
+        return trim(($user?->first_name ?? '') . ' ' . ($user?->last_name ?? '')) ?: 'Store';
+    }
 
-                $priceOffer = ($product->offer_price && $product->offer_expires_at && now()->lessThan($product->offer_expires_at))
-                    ? $product->offer_price : null;
-
-                $priceWholesale = ($product->wholesale_price && $item->qty >= 10)
-                    ? $product->wholesale_price : null;
-
-                if ($priceOffer && $priceWholesale) {
-                    return min($priceOffer, $priceWholesale);
-                } elseif ($priceOffer) {
-                    return $priceOffer;
-                } elseif ($priceWholesale) {
-                    return $priceWholesale;
-                } else {
-                    return $product->original_price;
-                }
-            };
-
-            $total = $items->sum(fn($i) => $calculateEffectivePrice($i) * $i->qty);
-
-            $mainOrder = Order::create([
+    private function recordCartBehavior(User $user, Product $product): void
+    {
+        try {
+            \App\Models\UserBehavior::create([
                 'user_id' => $user->id,
-                'total_price' => $total
+                'action' => 'cart',
+                'product_id' => $product->id,
+                'category_id' => $product->department_id,
             ]);
+        } catch (\Throwable) {
+            // Analytics must not break a cart mutation.
+        }
+    }
 
-            $grouped = $items->groupBy('seller_id');
-
-            foreach ($grouped as $sellerId => $sellerItems) {
-                $subOrder = SubOrder::create([
-                    'order_id' => $mainOrder->id,
-                    'seller_id' => $sellerId,
-                    'total' => $sellerItems->sum(fn($i) => $calculateEffectivePrice($i) * $i->qty)
-                ]);
-
-                foreach ($sellerItems as $item) {
-                    // التحقق من المخزون قبل الإضافة
-                    if ($item->product->quantity < $item->qty) {
-                        throw new \Exception("Product {$item->product->name} is out of stock");
-                    }
-
-                    // إضافة المنتج للجدول الجديد
-                    OrderItem::create([
-                        'sub_order_id' => $subOrder->id,
-                        'product_id' => $item->product_id,
-                        'variant_id' => $item->variant_id,
-                        'quantity' => $item->qty,
-                        'price' => $calculateEffectivePrice($item)
-                    ]);
-
-                    $item->product->decrement('quantity', $item->qty);
-
-                    // 🎯 تسجيل سلوك الشراء (Buy) لربطه بخوارزمية التوصيات
-                    try {
-                        \App\Models\UserBehavior::create([
-                            'user_id' => $user->id,
-                            'action' => 'buy',
-                            'product_id' => $item->product_id,
-                            'category_id' => $item->product->department_id,
-                        ]);
-                    } catch (\Exception $e) {
-                        // تجاهل الخطأ لعدم التأثير على عملية الشراء والدفع
-                    }
-                }
-            }
-
-            CartItem::where('user_id', $user->id)->delete();
-
-            return response()->json(['message' => 'Order placed successfully']);
-        });
+    private function recordBuyBehavior(User $user, Product $product): void
+    {
+        try {
+            \App\Models\UserBehavior::create([
+                'user_id' => $user->id,
+                'action' => 'buy',
+                'product_id' => $product->id,
+                'category_id' => $product->department_id,
+            ]);
+        } catch (\Throwable) {
+            // Analytics must not break an atomic checkout.
+        }
     }
 }

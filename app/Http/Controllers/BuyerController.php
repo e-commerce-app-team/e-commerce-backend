@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Product;
 use App\Models\User;
 use App\Models\Ad;
+use App\Models\Department;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -16,8 +17,18 @@ class BuyerController extends Controller
         $section = $request->route('section') ?? $request->input('section');
         $query = Product::query()->where('status', 'active')->with(['variants', 'seller']);
         $query->when($request->category_id, fn ($q, $id) => $q->where('category_id', $id));
-        $query->when($request->store_id, fn ($q, $id) => $q->where('user_id', $id));
-        $query->when($request->department_id, fn ($q, $id) => $q->where('department_id', $id));
+       $query->when($request->store_id, function ($q, $storeId) use ($request) {
+    $q->where('user_id', $storeId);
+
+    if ($request->filled('department_id')) {
+        $q->whereHas('department', function ($departmentQuery) use ($storeId, $request) {
+            $departmentQuery
+                ->where('id', $request->department_id)
+                ->where('seller_id', $storeId)
+                ->where('is_visible', true);
+        });
+    }
+});
         $query->when($request->q, fn ($q, $value) => $q->where('name', 'like', "%{$value}%"));
         $query->when($request->min_price, fn ($q, $value) => $q->where('original_price', '>=', $value));
         $query->when($request->max_price, fn ($q, $value) => $q->where('original_price', '<=', $value));
@@ -170,11 +181,45 @@ class BuyerController extends Controller
         return $this->products($request);
     }
 
-    public function storeDepartments(string $id)
-    {
-        return response()->json(['success' => true, 'data' => \App\Models\Department::where('seller_id', $id)
-            ->where('is_visible', true)->with('recursiveChildren')->orderBy('order_position')->get()]);
+    public function storeDepartments(Request $request, string $id)
+{
+    $parentId = $request->query('parent_id');
+
+    $departments = Department::where('seller_id', $id)
+        ->where('is_visible', true)
+        ->when($parentId !== null, function ($query) use ($parentId) {
+            $query->where('parent_id', $parentId);
+        }, function ($query) {
+            $query->whereNull('parent_id');
+        })
+       ->withCount([
+    'children' => function ($query) {
+        $query->where('is_visible', true);
     }
+])
+        ->withCount('products')
+        ->orderBy('order_position')
+        ->orderBy('name')
+        ->get()
+        ->map(function ($department) {
+            return [
+                'id' => $department->id,
+                'name' => $department->name,
+                'slug' => $department->slug,
+                'image_url' => $department->image_url,
+                'icon_url' => $department->icon_url,
+                'parent_id' => $department->parent_id,
+                'has_children' => $department->children_count > 0,
+                'products_count' => $department->products_count,
+            ];
+        });
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Store departments retrieved successfully',
+        'data' => $departments,
+    ]);
+}
 
     public function cart()
     {

@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\Transaction;
 use App\Http\Resources\OrderResource;
+use App\Services\WalletService;
 use DB;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -125,6 +126,7 @@ class OrderController extends Controller
             ],
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
+            'items.*.variant_id' => 'nullable|exists:product_variants,id',
             'items.*.quantity' => 'required|integer|min:1',
             'shipping_address_title' => 'nullable|string|max:255',
             'shipping_address_details' => 'required|string',
@@ -155,15 +157,24 @@ class OrderController extends Controller
             // تحميل علاقة القسم لاستخدامها في حساب الضريبة الديناميكية
             $product = Product::with('category')->find($item['product_id']);
             if ($product) {
-                $basePrice = ($product->offer_price && $product->offer_expires_at && $product->offer_expires_at->isFuture())
-                    ? $product->offer_price
-                    : $product->original_price;
+                $variant = ! empty($item['variant_id'])
+                    ? \App\Models\ProductVariant::whereKey($item['variant_id'])
+                        ->where('product_id', $product->id)->first()
+                    : null;
+                if (! empty($item['variant_id']) && (! $variant || ! $variant->is_active)) {
+                    return response()->json(['success' => false, 'message' => 'Selected product variant is invalid.'], 422);
+                }
+                $quote = app(\App\Services\PriceCalculationService::class)
+                    ->quote($product, (int) $item['quantity'], $variant);
+                $basePrice = $quote['base_unit_price'];
 
                 // تجميع بيانات المنتجات لحساب الضريبة لاحقاً، بدون تضمين الضريبة في base_price
                 $validatedItems[] = [
                     'product' => $product,
                     'quantity' => $item['quantity'],
                     'base_price' => (float) $basePrice,
+                    'unit_price' => (float) $quote['unit_price'],
+                    'variant_id' => $variant?->id,
                 ];
             }
         }
@@ -295,10 +306,7 @@ class OrderController extends Controller
             $qty = $validatedItem['quantity'];
 
             // حساب سعر الوحدة شاملاً الضريبة
-            $unitPrice = round(
-                $validatedItem['base_price'] * (1 + $product->effectiveTaxRate() / 100),
-                2
-            );
+            $unitPrice = round($validatedItem['unit_price'], 2);
             $itemTotal = round($unitPrice * $qty, 2);
 
             // البيانات للجدول القديم
@@ -310,12 +318,13 @@ class OrderController extends Controller
             // 2. تعبئة عناصر الطلب الفرعي لمنع السعر 0
             $subOrder->items()->create([
                 'product_id' => $product->id,
+                'variant_id' => $validatedItem['variant_id'],
                 'quantity' => $qty,
                 'unit_price' => $unitPrice,
                 'total_price' => $itemTotal,
             ]);
 
-            $product->increment('sales_count', $qty);
+            // Stock and sales are reserved only after the wallet payment.
         }
 
         // الحفاظ على العلاقة القديمة حتى لا يتأثر أي مكان آخر
@@ -351,8 +360,25 @@ class OrderController extends Controller
         ]);
 
         // تأمين: التاجر صاحب الطلب هو الوحيد المخول بالتعديل
-        $order = Order::where('seller_id', auth()->id())->findOrFail($id);
+        $order = Order::whereKey($id)
+            ->where(function ($query) {
+                $query->where('seller_id', auth()->id())
+                    ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', auth()->id()));
+            })
+            ->findOrFail($id);
         $newStatus = $request->status;
+
+        // Financial transitions belong to the wallet flow, never to a seller
+        // status toggle. Delivery is released only by buyer confirmation;
+        // rejection is handled by rejectOrder where the refund is atomic.
+        if (in_array($newStatus, ['delivered', 'cancelled_returned'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => $newStatus === 'delivered'
+                    ? 'Only the buyer can confirm delivery and release escrow.'
+                    : 'Use the reject order action to refund the escrow safely.',
+            ], 422);
+        }
 
         $timeline = $order->status_timeline ?? [];
         $timeline[] = [
@@ -363,12 +389,6 @@ class OrderController extends Controller
 
         // التحكم الآلي بحالة الضمان المالي Escrow بناءً على التحديث
         $paymentStatus = $order->payment_status;
-        if ($newStatus === 'delivered') {
-            $paymentStatus = 'released'; // فك الحجز وإرسال الأموال للبائع
-        } elseif ($newStatus === 'cancelled_returned') {
-            $paymentStatus = 'refunded'; // إرجاع المال للمشتري
-        }
-
         $order->update([
             'status' => $newStatus,
             'payment_status' => $paymentStatus,
@@ -475,7 +495,10 @@ class OrderController extends Controller
      */
     public function getVendorBadges()
     {
-        $badges = Order::where('seller_id', auth()->id())
+        $badges = Order::where(function ($query) {
+                $query->where('seller_id', auth()->id())
+                    ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', auth()->id()));
+            })
             ->selectRaw('status, count(*) as count')
             ->groupBy('status')
             ->pluck('count', 'status');
@@ -665,28 +688,22 @@ class OrderController extends Controller
             'order_id' => 'required|exists:orders,id'
         ]);
 
-        $order = Order::with('products')->where('id', $request->order_id)
-            ->where('seller_id', auth()->id())
-            ->where('status', 'pending')
-            ->where('payment_status', 'paid_escrow')
-            ->firstOrFail();
-
         DB::beginTransaction();
         try {
-            foreach ($order->products as $product) {
-                $requestedQuantity = $product->pivot->quantity;
-                $freshProduct = $product->fresh();
+            $order = Order::with(['products', 'subOrders.items'])
+            ->where('id', $request->order_id)
+            ->where(function ($query) {
+                $query->where('seller_id', auth()->id())
+                    ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', auth()->id()));
+            })
+            ->whereIn('status', ['pending', 'processing'])
+            ->whereIn('payment_status', ['unpaid', 'paid_escrow'])
+            ->lockForUpdate()
+            ->firstOrFail();
 
-                if ($freshProduct->quantity < $requestedQuantity) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => "Order cannot be accepted. Insufficient stock for product: {$product->name}"
-                    ], 400);
-                }
-            }
-
-            foreach ($order->products as $product) {
-                $product->decrement('quantity', $product->pivot->quantity);
+            $sellerSubOrder = $order->subOrders->firstWhere('seller_id', auth()->id());
+            if ($sellerSubOrder && $sellerSubOrder->status !== 'pending') {
+                return response()->json(['success' => false, 'message' => 'This seller sub-order was already processed.'], 409);
             }
 
             $timeline = $order->status_timeline ?? [];
@@ -698,8 +715,10 @@ class OrderController extends Controller
 
             Order::where('id', $order->id)->update([
                 'status' => 'processing',
+                'stock_reserved' => (bool) $order->stock_reserved,
                 'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
             ]);
+            $sellerSubOrder?->update(['status' => 'processing']);
 
             DB::commit();
 
@@ -714,6 +733,65 @@ class OrderController extends Controller
             return response()->json(['success' => false, 'message' => 'An error occurred.'], 500);
         }
     }
+
+    /** Seller quotes shipping for their sub-order; buyer pays only after all quotes exist. */
+    public function setShippingDetails(Request $request)
+    {
+        $data = $request->validate([
+            'order_id' => 'required|integer',
+            'shipping_method' => 'required|in:pickup,standard,express',
+            'shipping_cost' => 'required|numeric|min:0',
+            'estimated_delivery' => 'required|string|max:120',
+        ]);
+
+        return DB::transaction(function () use ($data) {
+            $seller = auth()->user();
+            $order = Order::with('subOrders.items')
+                ->whereIn('payment_status', ['unpaid'])
+                ->where(function ($query) use ($seller) {
+                    $query->where('seller_id', $seller->id)
+                        ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', $seller->id));
+                })
+                ->where(function ($query) use ($data) {
+                    $query->whereKey($data['order_id'])
+                        ->orWhereHas('subOrders', fn ($sub) => $sub->whereKey($data['order_id']));
+                })->lockForUpdate()->firstOrFail();
+
+            $subOrder = $order->subOrders()->whereKey($data['order_id'])->where('seller_id', $seller->id)->lockForUpdate()->first()
+                ?: $order->subOrders()->where('seller_id', $seller->id)->lockForUpdate()->first();
+            if (! $subOrder) {
+                $subOrder = $order->subOrders()->where('seller_id', $seller->id)->first();
+            }
+            if (! $subOrder) return response()->json(['success' => false, 'message' => 'Seller sub-order not found.'], 404);
+
+            $options = app(\App\Services\ShippingService::class)->getOptionsForSeller($seller);
+            $option = app(\App\Services\ShippingService::class)->resolveOption($options, $data['shipping_method']);
+            if (! $option) return response()->json(['success' => false, 'message' => 'This delivery method is not enabled by the seller.'], 422);
+            if ($data['shipping_method'] === 'pickup' && (float) $data['shipping_cost'] !== 0.0) {
+                return response()->json(['success' => false, 'message' => 'Self pickup must be free.'], 422);
+            }
+
+            $itemsSubtotal = (float) $subOrder->items()->sum(DB::raw('unit_price * quantity'));
+            $base = round(max(0, $itemsSubtotal - (float) ($subOrder->discount_amount ?? 0)), 2);
+            $total = round($base + (float) $data['shipping_cost'], 2);
+            $subOrder->update([
+                'shipping_method' => $data['shipping_method'],
+                'shipping_label' => $option['name'],
+                'shipping_cost' => $data['shipping_cost'],
+                'estimated_delivery' => $data['estimated_delivery'],
+                'total' => $total,
+            ]);
+
+            $subOrders = $order->subOrders()->get();
+            $pending = $subOrders->contains(fn ($sub) => $sub->shipping_cost === null);
+            $newTotal = round($subOrders->sum(fn ($sub) => (float) ($sub->total ?? 0)), 2);
+            $timeline = $order->status_timeline ?? [];
+            $timeline[] = ['status' => 'shipping_quoted', 'title' => 'Seller submitted delivery cost and estimate.', 'time' => now()->toDateTimeString()];
+            $order->update(['total_price' => $newTotal, 'shipping_pending' => $pending, 'status_timeline' => $timeline]);
+
+            return response()->json(['success' => true, 'order_id' => $order->id, 'shipping_pending' => $pending, 'total_price' => $newTotal, 'sub_order_total' => $total]);
+        });
+    }
     /**
 
 
@@ -726,53 +804,64 @@ class OrderController extends Controller
             'rejection_reason' => 'required|string|max:500'
         ]);
 
-        $order = Order::with(['products', 'buyer', 'seller'])->where('id', $request->order_id)
-            ->where('seller_id', auth()->id())
-            ->whereIn('status', ['pending', 'processing'])
-            ->firstOrFail();
-
-        return DB::transaction(function () use ($order, $request) {
+        return DB::transaction(function () use ($request) {
+            $order = Order::with(['products', 'buyer', 'seller', 'subOrders.items'])
+                ->where('id', $request->order_id)
+                ->where(function ($query) {
+                    $query->where('seller_id', auth()->id())
+                        ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', auth()->id()));
+                })
+                ->whereIn('status', ['pending', 'processing'])
+                ->lockForUpdate()
+                ->firstOrFail();
 
             if ($order->payment_status === 'paid_escrow') {
                 $buyer = $order->buyer;
-                $seller = $order->seller;
-
                 $totalAmount = $order->total_price;
-                $commissionRate = ($seller->role === 'wholesale') ? 0.05 : 0.10;
-                $adminCommission = $totalAmount * $commissionRate;
-                $sellerProfit = $totalAmount - $adminCommission;
-
-                $buyer->increment('balance', $totalAmount);
-                $seller->decrement('balance', $sellerProfit);
-
-                Transaction::create([
+                $buyer = \App\Models\User::whereKey($buyer->id)->lockForUpdate()->firstOrFail();
+                $wallet = app(WalletService::class);
+                $wallet->releaseLocked($buyer, (float) $totalAmount, [
+                    'order_id' => $order->id,
+                    'type' => 'escrow_release',
+                    'reference' => "order:{$order->id}:refund:escrow_release",
+                    'description' => "Escrow returned from rejected Order #{$order->id}",
+                ]);
+                $wallet->record([
                     'user_id' => $buyer->id,
                     'order_id' => $order->id,
                     'type' => 'refund',
+                    'direction' => 'credit',
+                    'status' => 'completed',
+                    'reference' => "order:{$order->id}:refund",
                     'amount' => $totalAmount,
-                    'description' => "Refunded amount for rejected Order #{$order->id}"
-                ]);
-
-                Transaction::create([
-                    'user_id' => $seller->id,
-                    'order_id' => $order->id,
-                    'type' => 'withdrawal',
-                    'amount' => $sellerProfit,
-                    'description' => "Deducted escrow funds due to rejection of Order #{$order->id}"
+                    'description' => "Refunded amount for rejected Order #{$order->id}",
                 ]);
             }
 
-            foreach ($order->products as $product) {
-                $orderQuantity = $product->pivot->quantity;
-
-                if ($order->status === 'processing') {
-                    $product->increment('quantity', $orderQuantity);
+            if ($order->stock_reserved) {
+                foreach ($order->subOrders as $subOrder) {
+                    foreach ($subOrder->items as $item) {
+                        $stockModel = $item->variant_id
+                            ? \App\Models\ProductVariant::find($item->variant_id)
+                            : Product::find($item->product_id);
+                        $stockModel?->increment('quantity', $item->quantity);
+                        $product = Product::find($item->product_id);
+                        if ($product && $product->sales_count >= $item->quantity) {
+                            $product->decrement('sales_count', $item->quantity);
+                        } elseif ($product) {
+                            $product->update(['sales_count' => 0]);
+                        }
+                    }
                 }
-
-                if ($product->sales_count >= $orderQuantity) {
-                    $product->decrement('sales_count', $orderQuantity);
-                } else {
-                    $product->update(['sales_count' => 0]);
+            } elseif ($order->status === 'processing') {
+                foreach ($order->products as $product) {
+                    $orderQuantity = $product->pivot->quantity;
+                    $product->increment('quantity', $orderQuantity);
+                    if ($product->sales_count >= $orderQuantity) {
+                        $product->decrement('sales_count', $orderQuantity);
+                    } else {
+                        $product->update(['sales_count' => 0]);
+                    }
                 }
             }
 
@@ -787,6 +876,7 @@ class OrderController extends Controller
             Order::where('id', $order->id)->update([
                 'status' => 'cancelled_returned',
                 'payment_status' => 'refunded',
+                'stock_reserved' => false,
                 'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
             ]);
 
@@ -809,7 +899,10 @@ class OrderController extends Controller
         ]);
 
         $order = Order::where('id', $request->order_id)
-            ->where('seller_id', auth()->id())
+            ->where(function ($query) {
+                $query->where('seller_id', auth()->id())
+                    ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', auth()->id()));
+            })
             ->where('status', 'processing')
             ->firstOrFail();
 
@@ -847,10 +940,18 @@ class OrderController extends Controller
             'order_id' => 'required|exists:orders,id'
         ]);
 
-        $order = Order::with(['buyer', 'products'])->where('id', $request->order_id)
-            ->where('seller_id', auth()->id())
-            ->where('status', 'processing')
+        $order = Order::with(['buyer', 'products', 'subOrders.items'])->where('id', $request->order_id)
+            ->where(function ($query) {
+                $query->where('seller_id', auth()->id())
+                    ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', auth()->id()));
+            })
+            ->whereIn('status', ['processing', 'pending'])
             ->firstOrFail();
+
+        $sellerSubOrder = $order->subOrders->firstWhere('seller_id', auth()->id());
+        if ($sellerSubOrder && $sellerSubOrder->status !== 'processing') {
+            return response()->json(['success' => false, 'message' => 'This seller sub-order is not ready for shipping.'], 422);
+        }
 
         $timeline = $order->status_timeline ?? [];
         $timeline[] = [
@@ -859,9 +960,14 @@ class OrderController extends Controller
             'time' => now()->toDateTimeString()
         ];
 
+        $sellerSubOrder?->update(['status' => 'shipped']);
+        $allSubOrdersShipped = $order->subOrders->isEmpty()
+            || $order->subOrders->every(fn ($sub) => $sub->id === $sellerSubOrder?->id
+                ? true
+                : $sub->status === 'shipped');
         Order::where('id', $order->id)->update([
-            'status' => 'shipped',
-            'shipped_at' => now(),
+            'status' => $allSubOrdersShipped ? 'shipped' : 'processing',
+            'shipped_at' => $allSubOrdersShipped ? now() : $order->shipped_at,
             'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
         ]);
 
@@ -877,7 +983,7 @@ class OrderController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Order marked as shipped.',
-            'order_status' => 'shipped',
+            'order_status' => $allSubOrdersShipped ? 'shipped' : 'processing',
             'shipping_manifest' => $shippingManifest
         ]);
     }
@@ -933,11 +1039,16 @@ class OrderController extends Controller
         $query = Order::with([
             'buyer:id,first_name,last_name,email,phone',
             'products',
+            'subOrders.items',
+            'subOrders.seller',
             'coupon' // 🔥 إضافة علاقة الكوبون
         ]);
 
         if (in_array($user->role, ['vendor', 'wholesale'])) {
-            $query->where('seller_id', $user->id);
+            $query->where(function ($orders) use ($user) {
+                $orders->where('seller_id', $user->id)
+                    ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', $user->id));
+            });
         } else {
             $query->where('user_id', $user->id);
         }
@@ -1008,4 +1119,3 @@ class OrderController extends Controller
         return OrderResource::collection($orders);
     }
 }
-

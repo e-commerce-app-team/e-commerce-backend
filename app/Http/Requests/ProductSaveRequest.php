@@ -81,6 +81,16 @@ class ProductSaveRequest extends FormRequest
         ];
     }
 
+    public function withValidator($validator): void
+    {
+        $validator->after(function ($validator): void {
+            $seller = auth()->user();
+            if ($seller && (is_null($seller->latitude) || is_null($seller->longitude) || trim((string) $seller->detailed_address) === '')) {
+                $validator->errors()->add('store_location', 'يجب تحديد موقع المتجر الرئيسي أولًا قبل إضافة أو نشر المنتجات.');
+            }
+        });
+    }
+
     public function messages(): array
     {
         return [

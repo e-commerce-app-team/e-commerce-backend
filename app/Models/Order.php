@@ -16,6 +16,7 @@ class Order extends Model
         'status',
         'payment_method',
         'payment_status',
+        'payment_qr_token',
         'shipping_address_title',
         'shipping_address_details',
         'customer_notes',
@@ -35,6 +36,9 @@ class Order extends Model
         'tax_breakdown',
         'platform_commission',
         'commission_rate_snapshot',
+        'stock_reserved',
+        'checkout_key',
+        'shipping_pending',
     ];
 
     protected $casts = [
@@ -49,6 +53,8 @@ class Order extends Model
         'delivered_at'   => 'datetime',
         'estimated_delivery_date' => 'datetime',
         'discount_amount' => 'decimal:2',
+        'stock_reserved' => 'boolean',
+        'shipping_pending' => 'boolean',
     ];
 
     // ============================================================
@@ -126,7 +132,12 @@ class Order extends Model
     }
 
     public function subOrders()
-{
-    return $this->hasMany(SubOrder::class);
-}
+    {
+        return $this->hasMany(SubOrder::class);
+    }
+
+    public function getEscrowAmountAttribute(): float
+    {
+        return round((float) $this->total_price, 2);
+    }
 }
