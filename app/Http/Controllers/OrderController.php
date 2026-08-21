@@ -13,6 +13,7 @@ use DB;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Carbon\Carbon;
+use App\Notifications\OrderStatusNotification;
 use Illuminate\Support\Facades\Cache;  // 🔥🔥🔥 أضف هذا السطر
 
 class OrderController extends Controller
@@ -702,7 +703,20 @@ class OrderController extends Controller
             ->firstOrFail();
 
             $sellerSubOrder = $order->subOrders->firstWhere('seller_id', auth()->id());
+            if (! $sellerSubOrder) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Seller sub-order not found.'], 404);
+            }
+            if ($order->payment_status !== 'paid_escrow') {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Buyer payment must be held in escrow before preparation starts.'], 422);
+            }
+            if ($sellerSubOrder->shipping_cost === null || ! $sellerSubOrder->shipping_approved) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Shipping cost must be approved before preparation starts.'], 422);
+            }
             if ($sellerSubOrder && $sellerSubOrder->status !== 'pending') {
+                DB::rollBack();
                 return response()->json(['success' => false, 'message' => 'This seller sub-order was already processed.'], 409);
             }
 
@@ -764,32 +778,91 @@ class OrderController extends Controller
             }
             if (! $subOrder) return response()->json(['success' => false, 'message' => 'Seller sub-order not found.'], 404);
 
+            $selectedMethod = (string) ($subOrder->shipping_method ?: $data['shipping_method']);
+            if ($subOrder->shipping_method !== null && $selectedMethod !== $data['shipping_method']) {
+                return response()->json(['success' => false, 'message' => 'The shipping method must match the buyer selection.'], 422);
+            }
             $options = app(\App\Services\ShippingService::class)->getOptionsForSeller($seller);
-            $option = app(\App\Services\ShippingService::class)->resolveOption($options, $data['shipping_method']);
+            $option = app(\App\Services\ShippingService::class)->resolveOption($options, $selectedMethod);
             if (! $option) return response()->json(['success' => false, 'message' => 'This delivery method is not enabled by the seller.'], 422);
-            if ($data['shipping_method'] === 'pickup' && (float) $data['shipping_cost'] !== 0.0) {
+            if ($selectedMethod === 'pickup' && (float) $data['shipping_cost'] !== 0.0) {
                 return response()->json(['success' => false, 'message' => 'Self pickup must be free.'], 422);
             }
 
             $itemsSubtotal = (float) $subOrder->items()->sum(DB::raw('unit_price * quantity'));
             $base = round(max(0, $itemsSubtotal - (float) ($subOrder->discount_amount ?? 0)), 2);
-            $total = round($base + (float) $data['shipping_cost'], 2);
+            $shippingCost = (($option['cost'] ?? null) !== null && (float) $option['cost'] === 0.0)
+                ? 0.0
+                : round((float) $data['shipping_cost'], 2);
+            $total = round($base + $shippingCost, 2);
+            $isFreeShipping = $shippingCost === 0.0;
             $subOrder->update([
-                'shipping_method' => $data['shipping_method'],
+                'shipping_method' => $selectedMethod,
                 'shipping_label' => $option['name'],
-                'shipping_cost' => $data['shipping_cost'],
+                'shipping_cost' => $shippingCost,
+                'shipping_approved' => $isFreeShipping,
+                'shipping_approved_at' => $isFreeShipping ? now() : null,
                 'estimated_delivery' => $data['estimated_delivery'],
                 'total' => $total,
             ]);
 
             $subOrders = $order->subOrders()->get();
-            $pending = $subOrders->contains(fn ($sub) => $sub->shipping_cost === null);
+            $pending = $subOrders->contains(fn ($sub) => $sub->shipping_cost === null || ! $sub->shipping_approved);
             $newTotal = round($subOrders->sum(fn ($sub) => (float) ($sub->total ?? 0)), 2);
             $timeline = $order->status_timeline ?? [];
             $timeline[] = ['status' => 'shipping_quoted', 'title' => 'Seller submitted delivery cost and estimate.', 'time' => now()->toDateTimeString()];
             $order->update(['total_price' => $newTotal, 'shipping_pending' => $pending, 'status_timeline' => $timeline]);
 
             return response()->json(['success' => true, 'order_id' => $order->id, 'shipping_pending' => $pending, 'total_price' => $newTotal, 'sub_order_total' => $total]);
+        });
+    }
+
+    /** Buyer approves one seller quote. Zero-cost quotes are auto-approved. */
+    public function approveShipping(Request $request, $orderId)
+    {
+        $data = $request->validate(['sub_order_id' => 'nullable|integer']);
+
+        return DB::transaction(function () use ($data, $orderId) {
+            $order = Order::whereKey($orderId)
+                ->where('user_id', auth()->id())
+                ->with('subOrders')
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $query = $order->subOrders()->lockForUpdate();
+            if (! empty($data['sub_order_id'])) {
+                $query->whereKey($data['sub_order_id']);
+            }
+            $subOrder = $query->first();
+            if (! $subOrder) {
+                return response()->json(['success' => false, 'message' => 'Seller sub-order not found.'], 404);
+            }
+            if ($subOrder->shipping_cost === null) {
+                return response()->json(['success' => false, 'message' => 'The seller has not submitted a shipping quote yet.'], 422);
+            }
+            if ((float) $subOrder->shipping_cost === 0.0) {
+                $subOrder->update(['shipping_approved' => true, 'shipping_approved_at' => $subOrder->shipping_approved_at ?: now()]);
+            } else {
+                $subOrder->update(['shipping_approved' => true, 'shipping_approved_at' => now()]);
+            }
+
+            $allResolved = $order->subOrders()->get()->every(fn ($sub) => $sub->shipping_cost !== null && (bool) $sub->shipping_approved);
+            $pending = ! $allResolved;
+            $timeline = $order->status_timeline ?? [];
+            $timeline[] = [
+                'status' => 'shipping_approved',
+                'sub_order_id' => $subOrder->id,
+                'title' => 'shipping_approved',
+                'time' => now()->toDateTimeString(),
+            ];
+            $order->update(['shipping_pending' => $pending, 'status_timeline' => $timeline]);
+
+            return response()->json([
+                'success' => true,
+                'shipping_pending' => $pending,
+                'shipping_ready_for_payment' => $allResolved,
+                'sub_order_id' => $subOrder->id,
+            ]);
         });
     }
     /**
@@ -880,6 +953,16 @@ class OrderController extends Controller
                 'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
             ]);
 
+            $order->buyer?->notify(new OrderStatusNotification(
+                'Order cancelled by seller',
+                'Your order was cancelled by the seller. Reason: ' . $request->rejection_reason,
+                [
+                    'type' => 'order_cancelled_by_seller',
+                    'order_id' => (string) $order->id,
+                    'reason' => $request->rejection_reason,
+                ],
+            ));
+
             return response()->json([
                 'success' => true,
                 'message' => 'Order rejected successfully. Buyer balance restored, stock/sales count reverted.',
@@ -936,56 +1019,104 @@ class OrderController extends Controller
 // ==========================================
     public function readyForShipping(Request $request)
     {
-        $request->validate([
-            'order_id' => 'required|exists:orders,id'
-        ]);
+        $request->validate(['order_id' => 'required|exists:orders,id']);
 
-        $order = Order::with(['buyer', 'products', 'subOrders.items'])->where('id', $request->order_id)
+        return DB::transaction(function () use ($request) {
+            $order = Order::with('subOrders.items')
+            ->whereKey($request->order_id)
             ->where(function ($query) {
                 $query->where('seller_id', auth()->id())
                     ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', auth()->id()));
             })
-            ->whereIn('status', ['processing', 'pending'])
+            ->where('payment_status', 'paid_escrow')
+            ->where('status', 'processing')
+            ->lockForUpdate()
             ->firstOrFail();
 
         $sellerSubOrder = $order->subOrders->firstWhere('seller_id', auth()->id());
-        if ($sellerSubOrder && $sellerSubOrder->status !== 'processing') {
-            return response()->json(['success' => false, 'message' => 'This seller sub-order is not ready for shipping.'], 422);
+        if (! $sellerSubOrder || $sellerSubOrder->status !== 'processing') {
+            return response()->json(['success' => false, 'message' => 'The seller sub-order must be in preparation.'], 422);
+        }
+        if ($sellerSubOrder->shipment_state === 'ready_for_shipping') {
+            return response()->json(['success' => true, 'message' => 'The order is already ready for shipping.']);
         }
 
         $timeline = $order->status_timeline ?? [];
         $timeline[] = [
-            'status' => 'shipped',
-            'title' => 'Order has been dispatched and handed over to courier.',
-            'time' => now()->toDateTimeString()
+            'status' => 'ready_for_shipping',
+            'title' => 'The seller finished preparing the order.',
+            'time' => now()->toDateTimeString(),
         ];
+        $sellerSubOrder->update(['shipment_state' => 'ready_for_shipping']);
+        $order->update(['status_timeline' => $timeline]);
 
-        $sellerSubOrder?->update(['status' => 'shipped']);
-        $allSubOrdersShipped = $order->subOrders->isEmpty()
-            || $order->subOrders->every(fn ($sub) => $sub->id === $sellerSubOrder?->id
-                ? true
-                : $sub->status === 'shipped');
-        Order::where('id', $order->id)->update([
+            return response()->json([
+                'success' => true,
+                'message' => 'Order is ready for shipping.',
+                'order_status' => 'processing',
+            ]);
+        });
+    }
+
+    public function shipOrder(Request $request)
+    {
+        $request->validate(['order_id' => 'required|exists:orders,id']);
+
+        return DB::transaction(function () use ($request) {
+            $order = Order::with(['buyer', 'products', 'subOrders.items'])
+            ->whereKey($request->order_id)
+            ->where(function ($query) {
+                $query->where('seller_id', auth()->id())
+                    ->orWhereHas('subOrders', fn ($sub) => $sub->where('seller_id', auth()->id()));
+            })
+            ->where('payment_status', 'paid_escrow')
+            ->whereIn('status', ['processing', 'shipped'])
+            ->lockForUpdate()
+            ->firstOrFail();
+
+        $sellerSubOrder = $order->subOrders->firstWhere('seller_id', auth()->id());
+            if (! $sellerSubOrder) {
+                return response()->json(['success' => false, 'message' => 'The seller sub-order was not found.'], 404);
+            }
+            if ($sellerSubOrder->status === 'shipped') {
+                return response()->json(['success' => true, 'message' => 'The order is already marked as shipped.', 'order_status' => $order->status]);
+            }
+            if ($sellerSubOrder->status !== 'processing') {
+            return response()->json(['success' => false, 'message' => 'The seller sub-order is not ready to ship.'], 422);
+            }
+            if ($sellerSubOrder->shipment_state !== 'ready_for_shipping') {
+            return response()->json(['success' => false, 'message' => 'Mark the order ready for shipping first.'], 422);
+            }
+
+        $autoReleaseDays = max(1, (int) \App\Models\PlatformSetting::getValue('auto_release_days', 3));
+        $sellerSubOrder->update([
+            'status' => 'shipped',
+            'shipment_state' => 'shipped',
+            'auto_release_days' => $autoReleaseDays,
+            'escrow_release_at' => now()->addDays($autoReleaseDays),
+        ]);
+
+        $timeline = $order->status_timeline ?? [];
+        $timeline[] = [
+            'status' => 'shipped',
+            'title' => 'The order was shipped by the seller.',
+            'time' => now()->toDateTimeString(),
+        ];
+        $allSubOrdersShipped = $order->subOrders->every(fn ($sub) =>
+            $sub->id === $sellerSubOrder->id || $sub->status === 'shipped'
+        );
+        $order->update([
             'status' => $allSubOrdersShipped ? 'shipped' : 'processing',
             'shipped_at' => $allSubOrdersShipped ? now() : $order->shipped_at,
-            'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
+            'status_timeline' => $timeline,
         ]);
 
-        $shippingManifest = [
-            'invoice_number' => 'SHP-' . $order->id . '-' . now()->format('ymd'),
-            'seller_name' => auth()->user()->first_name . ' ' . auth()->user()->last_name,
-            'buyer_name' => $order->buyer ? $order->buyer->first_name . ' ' . $order->buyer->last_name : 'N/A',
-            'shipping_address' => $order->shipping_address_details ?? 'Default address',
-            'total_amount' => $order->total_price . ' SAR',
-            'items_count' => $order->products->sum('pivot.quantity'),
-        ];
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Order marked as shipped.',
-            'order_status' => $allSubOrdersShipped ? 'shipped' : 'processing',
-            'shipping_manifest' => $shippingManifest
-        ]);
+            return response()->json([
+                'success' => true,
+                'message' => 'Order marked as shipped.',
+                'order_status' => $allSubOrdersShipped ? 'shipped' : 'processing',
+            ]);
+        });
     }
 
     /*    public function myOrders(Request $request)
@@ -1039,7 +1170,7 @@ class OrderController extends Controller
         $query = Order::with([
             'buyer:id,first_name,last_name,email,phone',
             'products',
-            'subOrders.items',
+            'subOrders.items.product',
             'subOrders.seller',
             'coupon' // 🔥 إضافة علاقة الكوبون
         ]);

@@ -17,20 +17,34 @@ class SubOrder extends Model
         'shipping_method',
         'shipping_label',
         'shipping_cost',
+        'shipping_approved',
+        'shipping_approved_at',
         'estimated_delivery',
         'coupon_id',
         'discount_amount',
         'status',
+        'shipment_state',
+        'escrow_release_at',
+        'escrow_released_at',
+        'delivery_confirmed_at',
+        'delivery_confirmation_type',
+        'auto_release_days',
     ];
 
     protected $casts = [
         'total'           => 'decimal:2',
         'shipping_cost'   => 'decimal:2',
+        'shipping_approved' => 'boolean',
+        'shipping_approved_at' => 'datetime',
         'discount_amount' => 'decimal:2',
         'escrow_amount' => 'decimal:2',
         'commission_rate_snapshot' => 'decimal:2',
         'platform_commission' => 'decimal:2',
         'seller_net_amount' => 'decimal:2',
+        'escrow_release_at' => 'datetime',
+        'escrow_released_at' => 'datetime',
+        'delivery_confirmed_at' => 'datetime',
+        'auto_release_days' => 'integer',
     ];
 
     public function order()

@@ -138,6 +138,6 @@ class Order extends Model
 
     public function getEscrowAmountAttribute(): float
     {
-        return round((float) $this->total_price, 2);
+        return round((float) $this->subOrders()->whereNull('escrow_released_at')->sum('escrow_amount'), 2);
     }
 }

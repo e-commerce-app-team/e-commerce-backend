@@ -405,6 +405,7 @@ class UserController extends Controller
             'success' => true,
             'data' => [
                 'shipping_mode' => $settings['shipping_mode'] ?? 'self_delivery',
+                'free_shipping' => (bool) ($settings['free_shipping'] ?? false),
                 'platform_available' => false,
                 'delivery_options' => [
                     'pickup' => array_key_exists('pickup', $settings['delivery_options'] ?? [])
@@ -430,6 +431,7 @@ class UserController extends Controller
         abort_unless(in_array($user->role, ['vendor', 'wholesale'], true), 403);
         $validated = $request->validate([
             'shipping_mode' => 'required|in:self_delivery,platform_delivery',
+            'free_shipping' => 'sometimes|boolean',
             'delivery_options' => 'required|array',
             'delivery_options.pickup' => 'required|boolean',
             'delivery_options.standard' => 'required|boolean',
@@ -440,6 +442,7 @@ class UserController extends Controller
         }
         $settings = $user->shipping_settings ?? [];
         $settings['shipping_mode'] = 'self_delivery';
+        $settings['free_shipping'] = (bool) ($validated['free_shipping'] ?? ($settings['free_shipping'] ?? false));
         $settings['delivery_options'] = $validated['delivery_options'];
         $user->update([
             'shipping_settings' => $settings,

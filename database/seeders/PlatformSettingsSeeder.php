@@ -22,6 +22,12 @@ class PlatformSettingsSeeder extends Seeder
                 'type'  => 'decimal',
                 'label' => 'عمولة تاجر الجملة (Wholesale) %',
             ],
+            [
+                'key'   => 'auto_release_days',
+                'value' => '3',
+                'type'  => 'integer',
+                'label' => 'Automatic escrow release period (days)',
+            ],
         ];
 
         foreach ($settings as $setting) {

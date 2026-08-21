@@ -357,8 +357,12 @@ class CartController extends Controller
                     'commission_rate_snapshot' => 0,
                     'platform_commission' => 0,
                     'status_timeline' => [[
+                        // Shipping approval is a separate concern from the
+                        // order lifecycle. Even when every seller quote is
+                        // free and auto-approved, the order must remain
+                        // pending until the buyer pays into escrow.
                         'status' => 'pending',
-                        'title' => 'Order request submitted; waiting for seller shipping quote.',
+                        'title' => $shippingPending ? 'order_submitted' : 'shipping_approved',
                         'time' => now()->toDateTimeString(),
                     ]],
                 ]);
@@ -373,6 +377,8 @@ class CartController extends Controller
                         'shipping_method' => $group['shipping']['id'],
                         'shipping_label' => $group['shipping']['name'],
                         'shipping_cost' => $group['shippingCost'],
+                        'shipping_approved' => $group['shippingCost'] !== null && (float) $group['shippingCost'] === 0.0,
+                        'shipping_approved_at' => $group['shippingCost'] !== null && (float) $group['shippingCost'] === 0.0 ? now() : null,
                         'estimated_delivery' => $group['shipping']['estimated_delivery'],
                         'coupon_id' => $group['coupon']?->id,
                         'discount_amount' => $group['discount'],

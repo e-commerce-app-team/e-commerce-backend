@@ -110,6 +110,7 @@ Route::get('wallet/withdrawals', [PayoutController::class, 'payoutHistory'])->mi
 Route::post('orders/{orderId}/pay', [PaymentController::class, 'payAndTransfer'])->middleware('auth:sanctum');
 
 Route::post('orders/{orderId}/confirm-delivery', [PaymentController::class, 'confirmDelivery'])->middleware('auth:sanctum');
+Route::post('orders/{orderId}/approve-shipping', [OrderController::class, 'approveShipping'])->middleware('auth:sanctum');
 Route::post('orders/{orderId}/payment-qr', [PaymentController::class, 'generateOrderPaymentQr'])->middleware('auth:sanctum');
 Route::post('sub-orders/{subOrderId}/payment-qr', [PaymentController::class, 'generateSubOrderPaymentQr'])->middleware('auth:sanctum');
 
@@ -131,6 +132,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('orders/reject', [OrderController::class, 'rejectOrder']);
     Route::post('orders/update-time', [OrderController::class, 'updatePreparationTime']);
     Route::post('orders/ready-shipping', [OrderController::class, 'readyForShipping']);
+    Route::post('orders/ship', [OrderController::class, 'shipOrder']);
 
     Route::get('my-orders', [OrderController::class, 'myOrders']);
 

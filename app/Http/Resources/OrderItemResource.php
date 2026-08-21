@@ -24,6 +24,14 @@ class OrderItemResource extends JsonResource
             'unit_price'  => $unitPrice,
             // إذا كان total_price صفر بالداتا بيز، بيحسبه تلقائياً
             'total_price' => $this->total_price > 0 ? (float)$this->total_price : ($unitPrice * $quantity),
+            'product' => $this->whenLoaded('product', function () {
+                $images = is_array($this->product?->images) ? $this->product->images : [];
+                return [
+                    'id' => $this->product?->id,
+                    'name' => $this->product?->name,
+                    'image' => $images[0] ?? null,
+                ];
+            }),
             'created_at'  => $this->created_at?->toDateTimeString(),
         ];
     }

@@ -11,6 +11,7 @@ use App\Services\PushNotificationService;
 use App\Services\PriceCalculationService;
 use App\Services\TaxService;
 use App\Services\WalletService;
+use App\Services\EscrowReleaseService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -19,7 +20,11 @@ use RuntimeException;
 
 class PaymentController extends Controller
 {
-    public function __construct(private WalletService $wallet, private PriceCalculationService $prices)
+    public function __construct(
+        private WalletService $wallet,
+        private PriceCalculationService $prices,
+        private EscrowReleaseService $escrowRelease,
+    )
     {
     }
 
@@ -205,8 +210,8 @@ class PaymentController extends Controller
                     ->whereKey($orderId)->where('user_id', $buyer->id)->lockForUpdate()->first();
                 if (! $order) return response()->json(['success' => false, 'message' => 'Order not found.'], 404);
                 if ($order->payment_status !== 'unpaid') return response()->json(['success' => false, 'message' => 'Order payment has already been processed.'], 409);
-                if ($order->shipping_pending || $order->subOrders->contains(fn ($sub) => $sub->shipping_cost === null)) {
-                    return response()->json(['success' => false, 'message' => 'Shipping cost is not set by all sellers yet.'], 422);
+                if ($order->shipping_pending || $order->subOrders->contains(fn ($sub) => $sub->shipping_cost === null || ! $sub->shipping_approved)) {
+                    return response()->json(['success' => false, 'message' => 'All shipping quotes must be resolved and approved before payment.'], 422);
                 }
 
                 foreach ($order->subOrders as $subOrder) {
@@ -272,49 +277,51 @@ class PaymentController extends Controller
         }
     }
 
-    public function confirmDelivery($orderId)
+    public function confirmDelivery(Request $request, $orderId)
     {
+        $data = $request->validate(['sub_order_id' => 'nullable|integer']);
         $buyerId = auth()->id();
         try {
-            return DB::transaction(function () use ($orderId, $buyerId) {
+            return DB::transaction(function () use ($data, $orderId, $buyerId) {
                 $buyer = $this->wallet->lockUser($buyerId);
                 $order = Order::whereKey($orderId)->where('user_id', $buyer->id)->lockForUpdate()->first();
                 if (! $order) return response()->json(['success' => false, 'message' => 'Order not found.'], 404);
                 if ($order->payment_status !== 'paid_escrow') return response()->json(['success' => false, 'message' => 'This escrow is already released or is not paid.'], 409);
-                if ($order->status !== 'shipped') return response()->json(['success' => false, 'message' => 'Delivery can only be confirmed after shipment.'], 422);
-
-                $subOrders = $order->subOrders()->get();
-                if ($subOrders->isEmpty() && $order->seller_id) $subOrders = collect([(object) ['id' => null, 'seller_id' => $order->seller_id, 'total' => $order->total_price, 'seller' => User::find($order->seller_id)]]);
-                if ($subOrders->isEmpty()) return response()->json(['success' => false, 'message' => 'Order has no valid seller escrow destination.'], 422);
-                $total = round((float) $order->total_price, 2);
-                $partsTotal = round((float) $subOrders->sum(fn ($sub) => (float) ($sub->total ?? 0)), 2);
-                $allocated = 0.0; $commissionTotal = 0.0; $maxRate = 0.0;
-                $taxService = app(TaxService::class);
-
-                $this->wallet->releaseLocked($buyer, $total, ['order_id' => $order->id, 'type' => 'escrow_release', 'reference' => "order:{$order->id}:escrow_release:buyer", 'description' => "Escrow released from Buyer for Order #{$order->id}"]);
-
-                foreach ($subOrders as $index => $subOrder) {
-                    $seller = $subOrder->seller ?: User::find($subOrder->seller_id);
-                    if (! $seller) throw new RuntimeException('Order seller is missing; escrow release was cancelled.');
-                    $seller = $this->wallet->lockUser($seller->id);
-                    $rawPart = $partsTotal > 0 ? (float) $subOrder->total : 0;
-                    $part = $index === $subOrders->count() - 1 ? round($total - $allocated, 2) : round($total * ($rawPart / max($partsTotal, 0.01)), 2);
-                    $allocated = round($allocated + $part, 2);
-                    $commission = $taxService->calculateCommission($part, $seller->role, $order->id);
-                    $commissionTotal = round($commissionTotal + $commission['commission'], 2); $maxRate = max($maxRate, $commission['rate']);
-                    $this->wallet->credit($seller, $commission['net'], ['order_id' => $order->id, 'type' => 'escrow_release', 'reference' => "order:{$order->id}:seller:{$seller->id}:release", 'description' => "Escrow release from Order #{$order->id}"]);
-                    $this->wallet->record(['user_id' => $seller->id, 'order_id' => $order->id, 'type' => 'commission', 'amount' => $commission['commission'], 'direction' => 'debit', 'reference' => "order:{$order->id}:seller:{$seller->id}:commission", 'description' => "Platform commission for Order #{$order->id}"]);
-                    $this->wallet->record(['user_id' => null, 'account_type' => 'platform', 'order_id' => $order->id, 'type' => 'commission', 'amount' => $commission['commission'], 'direction' => 'credit', 'reference' => "order:{$order->id}:seller:{$seller->id}:platform_commission", 'description' => "Platform commission from Order #{$order->id}"]);
-                    if ($subOrder->id) $subOrder->update(['escrow_amount' => $part, 'commission_rate_snapshot' => $commission['rate'], 'platform_commission' => $commission['commission'], 'seller_net_amount' => $commission['net']]);
+                $subOrdersQuery = $order->subOrders()->lockForUpdate();
+                if (! empty($data['sub_order_id'])) {
+                    $subOrdersQuery->whereKey($data['sub_order_id']);
+                }
+                $subOrders = $subOrdersQuery->get();
+                if ($subOrders->isEmpty()) {
+                    return response()->json(['success' => false, 'message' => 'Seller sub-order not found.'], 404);
+                }
+                $eligible = $subOrders->filter(fn ($sub) => $sub->status === 'shipped' && ! $sub->escrow_released_at && (float) ($sub->escrow_amount ?? 0) > 0);
+                if ($eligible->isEmpty()) return response()->json(['success' => false, 'message' => 'No shipped seller order is waiting for delivery confirmation.'], 422);
+                if (empty($data['sub_order_id']) && $eligible->count() > 1) {
+                    return response()->json(['success' => false, 'message' => 'Confirm delivery for each seller order separately.'], 422);
                 }
 
+                $released = 0.0;
+                foreach ($eligible as $subOrder) {
+                    $result = $this->escrowRelease->release($subOrder, 'delivery_confirmed_by_buyer');
+                    $released = round($released + (float) ($result['amount'] ?? 0), 2);
+                }
+
+                $freshSubOrders = $order->subOrders()->get();
+                $allDelivered = $freshSubOrders->isNotEmpty() && $freshSubOrders->every(fn ($sub) => $sub->status === 'delivered');
+                $anyShipped = $freshSubOrders->contains(fn ($sub) => $sub->status === 'shipped');
+                $anyProcessing = $freshSubOrders->contains(fn ($sub) => in_array($sub->status, ['pending', 'processing'], true));
+                $orderStatus = $allDelivered ? 'delivered' : ($anyShipped ? 'shipped' : ($anyProcessing ? 'processing' : 'pending'));
+                $allReleased = $freshSubOrders->isNotEmpty() && $freshSubOrders->every(fn ($sub) => (bool) $sub->escrow_released_at);
                 $timeline = $order->status_timeline ?? [];
-                $timeline[] = ['status' => 'delivered', 'title' => 'Buyer confirmed delivery and escrow was released.', 'time' => now()->toDateTimeString()];
-                $order->update(['status' => 'delivered', 'payment_status' => 'released', 'delivered_at' => now(), 'platform_commission' => $commissionTotal, 'commission_rate_snapshot' => $maxRate, 'status_timeline' => $timeline]);
-                $freshOrder = $order->fresh(['seller']);
-                app(InvoiceService::class)->generateOrderInvoice($freshOrder);
-                app(InvoiceService::class)->generateCommissionInvoice($freshOrder);
-                return response()->json(['success' => true, 'message' => 'Delivery confirmed. Escrow was released to the seller after commission.', 'order_status' => 'delivered', 'payment_status' => 'released', 'commission' => $commissionTotal, 'wallet' => $this->wallet->summary($buyer->fresh())]);
+                $timeline[] = ['status' => 'delivery_confirmed_by_buyer', 'title' => 'delivery_confirmed_by_buyer', 'time' => now()->toDateTimeString()];
+                $order->update([
+                    'status' => $orderStatus,
+                    'payment_status' => $allReleased ? 'released' : 'paid_escrow',
+                    'delivered_at' => $allDelivered ? now() : null,
+                    'status_timeline' => $timeline,
+                ]);
+                return response()->json(['success' => true, 'message' => 'Delivery confirmed and eligible seller escrow was released.', 'order_status' => $orderStatus, 'payment_status' => $allReleased ? 'released' : 'paid_escrow', 'released_amount' => $released, 'wallet' => $this->wallet->summary($buyer->fresh())]);
             });
         } catch (RuntimeException $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 422);

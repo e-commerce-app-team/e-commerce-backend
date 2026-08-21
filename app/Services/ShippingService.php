@@ -10,6 +10,7 @@ class ShippingService
     public function getOptionsForSeller(User $seller, float $subtotal = 0, bool $hasFreeShippingProduct = false): array
     {
         $settings = $seller->shipping_settings ?? [];
+        $hasFreeShippingProduct = $hasFreeShippingProduct || (bool) ($settings['free_shipping'] ?? false);
         $delivery = is_array($settings['delivery_options'] ?? null)
             ? $settings['delivery_options']
             : [];
@@ -23,13 +24,13 @@ class ShippingService
         if ($standard) {
             $options[] = $this->pendingOption(
                 'standard', 'Standard Delivery', 'توصيل عادي',
-                '2-4 days', '2-4 أيام'
+                '2-4 days', '2-4 أيام', $hasFreeShippingProduct
             );
         }
         if ($express) {
             $options[] = $this->pendingOption(
                 'express', 'Express Delivery', 'توصيل سريع',
-                '1-2 days', '1-2 أيام'
+                '1-2 days', '1-2 أيام', $hasFreeShippingProduct
             );
         }
         if ($pickup && $this->hasMainStoreLocation($seller)) {
@@ -50,16 +51,16 @@ class ShippingService
         return $options;
     }
 
-    private function pendingOption(string $id, string $name, string $nameAr, string $eta, string $etaAr): array
+    private function pendingOption(string $id, string $name, string $nameAr, string $eta, string $etaAr, bool $free = false): array
     {
         return [
             'id' => $id,
             'name' => $name,
             'name_ar' => $nameAr,
-            'cost' => null,
-            'cost_pending' => true,
-            'estimated_delivery' => null,
-            'estimated_delivery_ar' => null,
+            'cost' => $free ? 0.0 : null,
+            'cost_pending' => ! $free,
+            'estimated_delivery' => $free ? $eta : null,
+            'estimated_delivery_ar' => $free ? $etaAr : null,
             'eta_hint' => $eta,
             'eta_hint_ar' => $etaAr,
         ];
