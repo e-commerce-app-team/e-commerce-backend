@@ -167,12 +167,55 @@ class BuyerController extends Controller
     {
         $store = User::whereIn('role', ['vendor', 'wholesale'])->withCount('products')->findOrFail($id);
         $reviews = DB::table('store_reviews')->where('store_id', $store->id);
-        $store->rating = round((float) $reviews->avg('rating'), 1);
-        $store->reviews_count = $reviews->count();
-        $store->is_following = auth()->check() && DB::table('store_follows')
-            ->where(['user_id' => auth()->id(), 'store_id' => $store->id])->exists();
-        $store->products_count = $store->products_count;
-        return response()->json(['success' => true, 'data' => $store]);
+        $followColumn = Schema::hasColumn('store_follows', 'store_id') ? 'store_id' : 'seller_id';
+        $isFollowing = auth()->check() && DB::table('store_follows')
+            ->where(['user_id' => auth()->id(), $followColumn => $store->id])->exists();
+        $followersCount = DB::table('store_follows')
+            ->where($followColumn, $store->id)->count();
+
+        $canReview = false;
+        if (auth()->check() && auth()->user()->role === 'buyer') {
+            $canReview = DB::table('order_product')
+                ->join('orders', 'orders.id', '=', 'order_product.order_id')
+                ->join('products', 'products.id', '=', 'order_product.product_id')
+                ->where('orders.user_id', auth()->id())
+                ->where('products.user_id', $store->id)
+                ->whereIn('orders.status', ['paid', 'processing', 'shipped', 'delivered'])
+                ->exists();
+
+            if (!$canReview && Schema::hasTable('order_items')) {
+                $canReview = DB::table('order_items')
+                    ->join('sub_orders', 'sub_orders.id', '=', 'order_items.sub_order_id')
+                    ->join('orders', 'orders.id', '=', 'sub_orders.order_id')
+                    ->join('products', 'products.id', '=', 'order_items.product_id')
+                    ->where('orders.user_id', auth()->id())
+                    ->where('products.user_id', $store->id)
+                    ->whereIn('orders.status', ['paid', 'processing', 'shipped', 'delivered'])
+                    ->exists();
+            }
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'id' => $store->id,
+            'seller_id' => $store->id,
+            'store_name' => $store->store_name,
+            'store_description' => $store->store_description,
+            'description' => $store->store_description,
+            'store_logo' => $store->store_logo ? asset('storage/' . $store->store_logo) : null,
+            'store_cover' => $store->store_cover_photo ? asset('storage/' . $store->store_cover_photo) : null,
+            'category' => $store->category,
+            'phone' => $store->phone,
+            'email' => $store->store_email ?: $store->email,
+            'address' => $store->detailed_address,
+            'social_links' => $store->social_links ?? [],
+            'rating' => round((float) $reviews->avg('rating'), 1),
+            'reviews_count' => $reviews->count(),
+            'followers_count' => $followersCount,
+            'products_count' => $store->products_count,
+            'is_following' => $isFollowing,
+            'is_open' => true,
+            'can_review' => $canReview,
+        ]]);
     }
 
     public function storeProducts(Request $request, string $id)
@@ -326,21 +369,56 @@ class BuyerController extends Controller
     public function addStoreReview(Request $request, string $id)
     {
         User::whereIn('role', ['vendor', 'wholesale'])->findOrFail($id);
+        abort_unless(auth()->user()?->role === 'buyer', 403, 'Only buyers can review stores.');
         $data = $request->validate(['rating' => 'required|integer|min:1|max:5', 'comment' => 'nullable|string|max:2000']);
+
+        $purchased = DB::table('order_product')
+            ->join('orders', 'orders.id', '=', 'order_product.order_id')
+            ->join('products', 'products.id', '=', 'order_product.product_id')
+            ->where('orders.user_id', auth()->id())
+            ->where('products.user_id', $id)
+            ->whereIn('orders.status', ['paid', 'processing', 'shipped', 'delivered'])
+            ->exists();
+        if (!$purchased && Schema::hasTable('order_items')) {
+            $purchased = DB::table('order_items')
+                ->join('sub_orders', 'sub_orders.id', '=', 'order_items.sub_order_id')
+                ->join('orders', 'orders.id', '=', 'sub_orders.order_id')
+                ->join('products', 'products.id', '=', 'order_items.product_id')
+                ->where('orders.user_id', auth()->id())
+                ->where('products.user_id', $id)
+                ->whereIn('orders.status', ['paid', 'processing', 'shipped', 'delivered'])
+                ->exists();
+        }
+        abort_unless($purchased, 422, 'Store must be purchased before reviewing.');
+
         DB::table('store_reviews')->updateOrInsert(
             ['user_id' => auth()->id(), 'store_id' => $id],
             $data + ['updated_at' => now(), 'created_at' => now()]
         );
-        return response()->json(['success' => true]);
+        $reviews = DB::table('store_reviews')->where('store_id', $id);
+        return response()->json(['success' => true, 'rating' => round((float) $reviews->avg('rating'), 1), 'reviews_count' => $reviews->count()]);
     }
 
     public function toggleFollow(string $id)
     {
         User::whereIn('role', ['vendor', 'wholesale'])->findOrFail($id);
-        $where = ['user_id' => auth()->id(), 'store_id' => $id];
+        $followColumn = Schema::hasColumn('store_follows', 'store_id') ? 'store_id' : 'seller_id';
+        $where = ['user_id' => auth()->id(), $followColumn => $id];
         $exists = DB::table('store_follows')->where($where)->exists();
-        $exists ? DB::table('store_follows')->where($where)->delete() : DB::table('store_follows')->insert($where + ['created_at' => now(), 'updated_at' => now()]);
-        return response()->json(['success' => true, 'is_following' => !$exists]);
+        if ($exists) {
+            DB::table('store_follows')->where($where)->delete();
+        } else {
+            $insert = $where;
+            if (Schema::hasColumn('store_follows', 'followed_at')) $insert['followed_at'] = now();
+            if (Schema::hasColumn('store_follows', 'created_at')) $insert['created_at'] = now();
+            if (Schema::hasColumn('store_follows', 'updated_at')) $insert['updated_at'] = now();
+            DB::table('store_follows')->insert($insert);
+        }
+        return response()->json([
+            'success' => true,
+            'is_following' => !$exists,
+            'followers_count' => DB::table('store_follows')->where($followColumn, $id)->count(),
+        ]);
     }
 
     public function profile()

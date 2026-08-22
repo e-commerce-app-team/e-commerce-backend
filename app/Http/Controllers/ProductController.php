@@ -70,7 +70,12 @@ class ProductController extends Controller
             }
         }
         // 5.5 إرسال الإشعار لجميع متابعي البائع/المتجر الحالي
-        $followers = $user->storeFollowers;
+        // Notifications must target the followed users, not StoreFollow pivot records.
+        $followers = $user->storeFollowers()
+            ->with('buyer')
+            ->get()
+            ->pluck('buyer')
+            ->filter();
 
         if ($followers && $followers->count() > 0) {
             Notification::send($followers, new NewProductNotification($product));
