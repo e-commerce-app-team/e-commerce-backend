@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\Transaction;
 use App\Http\Resources\OrderResource;
 use App\Services\WalletService;
+use App\Services\NotificationService;
 use DB;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -330,6 +331,12 @@ class OrderController extends Controller
 
         // الحفاظ على العلاقة القديمة حتى لا يتأثر أي مكان آخر
         $order->products()->attach($syncData);
+
+        $notification = app(NotificationService::class);
+        $notification->notify($buyer, 'order_created', 'notification_order_created_title', 'notification_order_created_message',
+            ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
+        $notification->notify($order->seller, 'new_order', 'notification_new_order_title', 'notification_new_order_message',
+            ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
 
         // 🔥 تنظيف Cache بعد إنشاء الطلب (اختياري)
         // Cache::forget('order_total_' . $buyer->id);
@@ -736,6 +743,10 @@ class OrderController extends Controller
 
             DB::commit();
 
+            app(NotificationService::class)->notify($order->load('buyer')->buyer, 'order_preparing',
+                'notification_order_preparing_title', 'notification_order_preparing_message',
+                ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Order accepted successfully. Preparing items.',
@@ -753,9 +764,11 @@ class OrderController extends Controller
     {
         $data = $request->validate([
             'order_id' => 'required|integer',
-            'shipping_method' => 'required|in:pickup,standard,express',
+            // The buyer selected the delivery method during checkout. The
+            // seller submits only the quote and expected delivery time.
+            'shipping_method' => 'nullable|in:pickup,standard,express',
             'shipping_cost' => 'required|numeric|min:0',
-            'estimated_delivery' => 'required|string|max:120',
+            'estimated_delivery' => 'nullable|string|max:120',
         ]);
 
         return DB::transaction(function () use ($data) {
@@ -778,9 +791,12 @@ class OrderController extends Controller
             }
             if (! $subOrder) return response()->json(['success' => false, 'message' => 'Seller sub-order not found.'], 404);
 
-            $selectedMethod = (string) ($subOrder->shipping_method ?: $data['shipping_method']);
-            if ($subOrder->shipping_method !== null && $selectedMethod !== $data['shipping_method']) {
-                return response()->json(['success' => false, 'message' => 'The shipping method must match the buyer selection.'], 422);
+            // Never let the seller change the method selected by the buyer.
+            // The fallback keeps compatibility with legacy orders created
+            // before shipping_method was persisted on the sub-order.
+            $selectedMethod = (string) ($subOrder->shipping_method ?: ($data['shipping_method'] ?? ''));
+            if ($selectedMethod === '') {
+                return response()->json(['success' => false, 'message' => 'The buyer must select a shipping method first.'], 422);
             }
             $options = app(\App\Services\ShippingService::class)->getOptionsForSeller($seller);
             $option = app(\App\Services\ShippingService::class)->resolveOption($options, $selectedMethod);
@@ -794,6 +810,13 @@ class OrderController extends Controller
             $shippingCost = (($option['cost'] ?? null) !== null && (float) $option['cost'] === 0.0)
                 ? 0.0
                 : round((float) $data['shipping_cost'], 2);
+            $estimatedDelivery = trim((string) ($data['estimated_delivery'] ?? ''));
+            if ($shippingCost > 0 && $estimatedDelivery === '') {
+                return response()->json(['success' => false, 'message' => 'Expected delivery time is required for paid shipping.'], 422);
+            }
+            if ($estimatedDelivery === '') {
+                $estimatedDelivery = (string) ($option['estimated_delivery'] ?? '');
+            }
             $total = round($base + $shippingCost, 2);
             $isFreeShipping = $shippingCost === 0.0;
             $subOrder->update([
@@ -802,7 +825,7 @@ class OrderController extends Controller
                 'shipping_cost' => $shippingCost,
                 'shipping_approved' => $isFreeShipping,
                 'shipping_approved_at' => $isFreeShipping ? now() : null,
-                'estimated_delivery' => $data['estimated_delivery'],
+                'estimated_delivery' => $estimatedDelivery,
                 'total' => $total,
             ]);
 
@@ -812,6 +835,10 @@ class OrderController extends Controller
             $timeline = $order->status_timeline ?? [];
             $timeline[] = ['status' => 'shipping_quoted', 'title' => 'Seller submitted delivery cost and estimate.', 'time' => now()->toDateTimeString()];
             $order->update(['total_price' => $newTotal, 'shipping_pending' => $pending, 'status_timeline' => $timeline]);
+
+            app(NotificationService::class)->notify($order->load('buyer')->buyer, 'order_shipping_quote',
+                'notification_shipping_quote_title', 'notification_shipping_quote_message',
+                ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'sub_order_id' => (string) $subOrder->id, 'route' => 'shipping_quote'], NotificationService::CATEGORY_ORDERS, true);
 
             return response()->json(['success' => true, 'order_id' => $order->id, 'shipping_pending' => $pending, 'total_price' => $newTotal, 'sub_order_total' => $total]);
         });
@@ -856,6 +883,11 @@ class OrderController extends Controller
                 'time' => now()->toDateTimeString(),
             ];
             $order->update(['shipping_pending' => $pending, 'status_timeline' => $timeline]);
+
+            $subOrder->load('seller');
+            app(NotificationService::class)->notify($subOrder->seller, 'order_shipping_approved',
+                'notification_shipping_approved_title', 'notification_shipping_approved_message',
+                ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'sub_order_id' => (string) $subOrder->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
 
             return response()->json([
                 'success' => true,
@@ -953,15 +985,12 @@ class OrderController extends Controller
                 'status_timeline' => json_encode($timeline) // ✅ استخدام json_encode
             ]);
 
-            $order->buyer?->notify(new OrderStatusNotification(
-                'Order cancelled by seller',
-                'Your order was cancelled by the seller. Reason: ' . $request->rejection_reason,
-                [
-                    'type' => 'order_cancelled_by_seller',
-                    'order_id' => (string) $order->id,
-                    'reason' => $request->rejection_reason,
-                ],
-            ));
+            app(NotificationService::class)->notify($order->buyer, 'order_cancelled',
+                'notification_order_cancelled_title', 'notification_order_cancelled_message',
+                ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order', 'reason' => $request->rejection_reason], NotificationService::CATEGORY_ORDERS, true);
+            app(NotificationService::class)->notify($order->buyer, 'refund',
+                'notification_refund_title', 'notification_refund_message',
+                ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
 
             return response()->json([
                 'success' => true,
@@ -1050,6 +1079,10 @@ class OrderController extends Controller
         $sellerSubOrder->update(['shipment_state' => 'ready_for_shipping']);
         $order->update(['status_timeline' => $timeline]);
 
+        app(NotificationService::class)->notify($order->load('buyer')->buyer, 'order_preparing',
+            'notification_order_preparing_title', 'notification_order_preparing_message',
+            ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Order is ready for shipping.',
@@ -1110,6 +1143,13 @@ class OrderController extends Controller
             'shipped_at' => $allSubOrdersShipped ? now() : $order->shipped_at,
             'status_timeline' => $timeline,
         ]);
+
+            app(NotificationService::class)->notify($order->buyer, 'order_shipped',
+                'notification_order_shipped_title', 'notification_order_shipped_message',
+                ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
+            app(NotificationService::class)->notify($order->buyer, 'order_delivery_confirmation',
+                'notification_delivery_confirmation_title', 'notification_delivery_confirmation_message',
+                ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
 
             return response()->json([
                 'success' => true,

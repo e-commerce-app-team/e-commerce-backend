@@ -8,9 +8,14 @@ class Ad extends Model
 {
     protected $fillable = [
         'seller_id',
+        'product_id',
         'type',
         'title',
+        'title_ar',
+        'title_en',
         'description',
+        'description_ar',
+        'description_en',
         'image_url',
         'link',
         'duration',
@@ -36,6 +41,11 @@ class Ad extends Model
     public function seller()
     {
         return $this->belongsTo(User::class, 'seller_id');
+    }
+
+    public function product()
+    {
+        return $this->belongsTo(Product::class);
     }
 
     public function views()

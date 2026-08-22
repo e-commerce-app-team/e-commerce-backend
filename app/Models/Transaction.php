@@ -14,6 +14,7 @@ class Transaction extends Model
         'user_id',
         'counterparty_user_id',
         'order_id',
+        'ad_id',
         'type',
         'direction',
         'status',
@@ -38,5 +39,10 @@ class Transaction extends Model
     public function order()
     {
         return $this->belongsTo(Order::class);
+    }
+
+    public function ad()
+    {
+        return $this->belongsTo(Ad::class);
     }
 }

@@ -3,11 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use App\Models\Coupon;
+use App\Models\CouponUsage;
 use App\Models\SubOrder;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\InvoiceService;
 use App\Services\PushNotificationService;
+use App\Services\NotificationService;
 use App\Services\PriceCalculationService;
 use App\Services\TaxService;
 use App\Services\WalletService;
@@ -60,7 +63,10 @@ class PaymentController extends Controller
 
     public function getTransactionHistory()
     {
-        $transactions = auth()->user()->transactions()->with('order:id,status,created_at')->latest()->paginate(100);
+        $transactions = auth()->user()->transactions()
+            ->with(['order:id,status,created_at', 'ad:id,type,title,title_ar,title_en'])
+            ->latest()
+            ->paginate(100);
         return response()->json([
             'success' => true,
             'data' => $transactions->items(),
@@ -267,9 +273,32 @@ class PaymentController extends Controller
                 $order->update(['payment_status' => 'paid_escrow', 'stock_reserved' => true, 'status_timeline' => $timeline]);
                 foreach ($order->subOrders as $subOrder) {
                     $subOrder->update(['escrow_amount' => (float) $subOrder->total]);
+                    if ($subOrder->coupon_id && ! CouponUsage::where('order_id', $order->id)
+                        ->where('coupon_id', $subOrder->coupon_id)->exists()) {
+                        CouponUsage::create([
+                            'coupon_id' => $subOrder->coupon_id,
+                            'user_id' => $buyer->id,
+                            'order_id' => $order->id,
+                            'discount_amount' => $subOrder->discount_amount ?? 0,
+                            'order_total_before_discount' => ($subOrder->total ?? 0)
+                                + ($subOrder->discount_amount ?? 0)
+                                - ($subOrder->shipping_cost ?? 0),
+                            'order_total_after_discount' => ($subOrder->total ?? 0)
+                                - ($subOrder->shipping_cost ?? 0),
+                        ]);
+                        Coupon::whereKey($subOrder->coupon_id)->increment('used_count');
+                    }
                 }
 
-                app(PushNotificationService::class)->sendToUser($buyer->fresh(), 'Order Payment Confirmed', "Your payment for order #{$order->id} is held safely in escrow.", ['type' => 'order_confirmed', 'order_id' => (string) $order->id]);
+                $notifications = app(NotificationService::class);
+                $notifications->notify($buyer->fresh(), 'payment_succeeded', 'notification_payment_success_title', 'notification_payment_success_message',
+                    ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
+                foreach ($order->subOrders as $subOrder) {
+                    if ($subOrder->seller) {
+                        $notifications->notify($subOrder->seller, 'payment_succeeded', 'notification_payment_success_title', 'notification_seller_payment_success_message',
+                            ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
+                    }
+                }
                 return response()->json(['success' => true, 'message' => 'Payment successful. Funds are locked in escrow until delivery confirmation.', 'wallet' => $this->wallet->summary($buyer->fresh()), 'order_id' => $order->id, 'order_number' => '#' . str_pad((string) $order->id, 6, '0', STR_PAD_LEFT), 'order_status' => $order->status, 'payment_status' => 'paid_escrow']);
             });
         } catch (RuntimeException $e) {
@@ -321,6 +350,15 @@ class PaymentController extends Controller
                     'delivered_at' => $allDelivered ? now() : null,
                     'status_timeline' => $timeline,
                 ]);
+                $notifications = app(NotificationService::class);
+                $notifications->notify($buyer->fresh(), 'order_delivery_confirmed', 'notification_delivery_confirmed_title', 'notification_delivery_confirmed_message',
+                    ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
+                foreach ($freshSubOrders as $subOrder) {
+                    if ($subOrder->seller) {
+                        $notifications->notify($subOrder->seller, 'merchant_payment_released', 'notification_payment_released_title', 'notification_payment_released_message',
+                            ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'wallet'], NotificationService::CATEGORY_ORDERS, true);
+                    }
+                }
                 return response()->json(['success' => true, 'message' => 'Delivery confirmed and eligible seller escrow was released.', 'order_status' => $orderStatus, 'payment_status' => $allReleased ? 'released' : 'paid_escrow', 'released_amount' => $released, 'wallet' => $this->wallet->summary($buyer->fresh())]);
             });
         } catch (RuntimeException $e) {

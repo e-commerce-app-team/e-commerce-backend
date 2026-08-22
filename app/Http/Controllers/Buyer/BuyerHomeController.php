@@ -84,7 +84,7 @@ class BuyerHomeController extends Controller
     /**
      * Map a Product model → the standard buyer product JSON shape.
      */
-    private function formatProduct(Product $product, ?int $authUserId = null): array
+    private function formatProduct(Product $product, ?int $authUserId = null, ?string $badgeLabel = null, ?int $adId = null): array
     {
         // Determine effective price (offer_price if valid and not expired)
         $now           = now();
@@ -119,7 +119,8 @@ class BuyerHomeController extends Controller
             'image'            => $image,
             'rating'           => $product->rating ?? 0,
             'rating_count'     => $product->rating_count ?? 0,
-            'badge_label'      => null,
+            'badge_label'      => $badgeLabel,
+            'ad_id'            => $adId,
             'store_id'         => $product->user_id,
             'store_name'       => $product->seller?->store_name ?? null,
             'category_id'      => $product->category_id ?? $product->department_id,
@@ -136,7 +137,7 @@ class BuyerHomeController extends Controller
     /**
      * Map a User (vendor/wholesale) model → the standard buyer store JSON shape.
      */
-    private function formatStore(User $store, bool $isFeatured = false, ?float $distance = null): array
+    private function formatStore(User $store, bool $isFeatured = false, ?float $distance = null, ?int $adId = null): array
     {
         return [
             'id'             => $store->id,
@@ -150,13 +151,14 @@ class BuyerHomeController extends Controller
             'review_count'   => (int) ($store->store_reviews_count ?? 0),
             'products_count' => (int) ($store->products_count ?? 0),
             'is_featured'    => $isFeatured,
+            'ad_id'          => $adId,
             'distance'       => $distance,
         ];
     }
 
     // ─── GET /buyer/banners ───────────────────────────────────────────────────
 
-    public function getBanners()
+    public function getBanners(Request $request)
     {
         try {
             $ads = Ad::active()
@@ -166,10 +168,11 @@ class BuyerHomeController extends Controller
                 ->limit(6)
                 ->get();
 
+            $locale = str_starts_with((string) $request->query('locale', 'en'), 'ar') ? 'ar' : 'en';
             $data = $ads->map(fn(Ad $ad) => [
                 'id'          => $ad->id,
-                'title'       => $ad->title,
-                'subtitle'    => $ad->description,
+                'title'       => $locale === 'ar' ? ($ad->title_ar ?: $ad->title) : ($ad->title_en ?: $ad->title),
+                'subtitle'    => $locale === 'ar' ? ($ad->description_ar ?: $ad->description) : ($ad->description_en ?: $ad->description),
                 'image'       => $this->storageUrl($ad->image_url),
                 'badge_label' => null,
                 'seller_id'   => $ad->seller_id,
@@ -211,10 +214,13 @@ class BuyerHomeController extends Controller
     {
         try {
             // Get seller IDs that have an active featured_store ad
-            $boostedIds = Ad::active()
+            $featuredAds = Ad::active()
                 ->byType('featured_store')
-                ->pluck('seller_id')
-                ->toArray();
+                ->get(['id', 'seller_id']);
+            $boostedIds = $featuredAds->pluck('seller_id')->unique()->values()->all();
+            $featuredAdBySeller = $featuredAds->groupBy('seller_id')
+                ->map(fn ($ads) => (int) $ads->first()->id)
+                ->all();
 
             // Boosted stores plus all stores with their real review average.
             $stores = User::whereIn('role', ['vendor', 'wholesale'])
@@ -226,8 +232,13 @@ class BuyerHomeController extends Controller
                 ->limit(10)
                 ->get();
 
-            $data = $stores->map(function (User $store) use ($boostedIds) {
-                return $this->formatStore($store, in_array($store->id, $boostedIds));
+            $data = $stores->map(function (User $store) use ($boostedIds, $featuredAdBySeller) {
+                return $this->formatStore(
+                    $store,
+                    in_array($store->id, $boostedIds),
+                    null,
+                    $featuredAdBySeller[$store->id] ?? null,
+                );
             })->values();
 
             return response()->json(['success' => true, 'data' => $data]);
@@ -356,13 +367,47 @@ class BuyerHomeController extends Controller
         try {
             $authUser = $request->user();
 
-            $products = Product::where('status', 'active')
+            $promotedAds = Ad::active()
+                ->where('type', 'promoted_product')
+                ->whereNotNull('product_id')
+                ->orderByDesc('created_at')
+                ->get(['id', 'product_id']);
+            $promotedIds = $promotedAds->pluck('product_id')
+                ->map(fn ($id) => (int) $id)
+                ->unique()
+                ->values()
+                ->all();
+            $promotedAdByProduct = $promotedAds->keyBy(fn ($ad) => (int) $ad->product_id);
+
+            $promoted = collect();
+            if ($promotedIds !== []) {
+                $promoted = Product::where('status', 'active')
+                    ->whereIn('id', $promotedIds)
+                    ->with('seller:id,store_name')
+                    ->orderByRaw('FIELD(id, ' . implode(',', array_map('intval', $promotedIds)) . ')')
+                    ->limit(10)
+                    ->get();
+            }
+
+            $organic = Product::where('status', 'active')
+                ->when($promotedIds !== [], fn ($query) => $query->whereNotIn('id', $promotedIds))
                 ->with('seller:id,store_name')
                 ->orderByDesc('sales_count')
-                ->limit(10)
+                ->limit(max(0, 10 - $promoted->count()))
                 ->get();
+            $products = $promoted->concat($organic);
+            $locale = str_starts_with((string) $request->query('locale', 'en'), 'ar') ? 'ar' : 'en';
 
-            $data = $products->map(fn($p) => $this->formatProduct($p, $authUser?->id))->values();
+            $data = $products->map(function ($product) use ($authUser, $promotedIds, $promotedAdByProduct, $locale) {
+                $isPromoted = in_array($product->id, $promotedIds, true);
+                $ad = $isPromoted ? $promotedAdByProduct->get((int) $product->id) : null;
+                return $this->formatProduct(
+                    $product,
+                    $authUser?->id,
+                    $isPromoted ? ($locale === 'ar' ? 'منتج معزز' : 'Promoted') : null,
+                    $ad?->id,
+                );
+            })->values();
 
             return response()->json(['success' => true, 'data' => $data]);
         } catch (\Throwable $e) {

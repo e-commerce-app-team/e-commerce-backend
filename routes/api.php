@@ -9,16 +9,19 @@ use App\Http\Controllers\ProductController;
 use App\Http\Controllers\AdminSettingsController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ChatController;
+use App\Http\Controllers\ChatNotificationController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\Buyer\BuyerProfileController;
 use App\Http\Controllers\Buyer\StoreFollowController;
 use App\Http\Controllers\Buyer\NotificationController;
+use App\Http\Controllers\NotificationController as AppNotificationController;
 use App\Http\Controllers\MerchantDepartment;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\StoreReviewController;
 use App\Http\Controllers\Buyer\StoreController;
 use App\Http\Controllers\Buyer\CartController;
 use App\Http\Controllers\Buyer\BannerController;
+use App\Http\Controllers\Buyer\BuyerHomeController;
 use App\Http\Controllers\OtpController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayoutController;
@@ -38,7 +41,7 @@ Route::Post('login', [UserController::class, 'login']);
 Route::post('register/buyer', [UserController::class, 'registerBuyer']);
 Route::post('register/seller', [UserController::class, 'registerSeller']);
 Route::post('logout', [UserController::class, 'logout'])->middleware('auth:sanctum');
-Route::post('auth/fcm-token', [UserController::class, 'saveFcmToken'])->middleware('auth:sanctum');
+Route::post('auth/fcm-token', [AppNotificationController::class, 'registerDevice'])->middleware('auth:sanctum');
 
 // قبول دعوة الموظف (لا يحتاج Token)
 Route::post('auth/staff/accept-invite', [StaffController::class, 'acceptInvite']);
@@ -167,6 +170,8 @@ Route::get('ads/active', [AdController::class, 'getActiveAds']);
 Route::get('ads/banners', [AdController::class, 'getBanners']);
 Route::get('ads/promoted', [AdController::class, 'getPromotedProducts']);
 Route::get('ads/featured-stores', [AdController::class, 'getFeaturedStores']);
+Route::post('ads/{adId}/view', [AdController::class, 'trackView']);
+Route::get('ads/{adId}/click', [AdController::class, 'trackClick']);
 
 
 
@@ -175,13 +180,15 @@ Route::get('categories', [CategoryController::class, 'getAllCategories']);
 // Buyer catalogue is public; user-specific state is included when a token is present.
 Route::get('buyer/products', [BuyerController::class, 'products']);
 Route::get('buyer/categories', [CategoryController::class, 'getAllCategories']);
-Route::get('buyer/products/featured', [BuyerController::class, 'products'])->defaults('section', 'featured');
+Route::get('buyer/banners', [BuyerHomeController::class, 'getBanners']);
+Route::get('buyer/stores/nearby', [BuyerHomeController::class, 'getNearbyStores']);
+Route::get('buyer/products/featured', [BuyerHomeController::class, 'getFeaturedProducts']);
 Route::get('buyer/products/flash-sale', [BuyerController::class, 'products'])->defaults('section', 'flash_sale');
 Route::get('buyer/products/trending', [BuyerController::class, 'products'])->defaults('section', 'trending');
 Route::get('buyer/products/new-arrivals', [BuyerController::class, 'products'])->defaults('section', 'new_arrivals');
 Route::get('buyer/products/offers', [BuyerController::class, 'products'])->defaults('section', 'offers');
 Route::get('buyer/products/recommended', [BuyerController::class, 'products'])->defaults('section', 'recommended');
-Route::get('buyer/stores/featured', [BuyerController::class, 'stores'])->defaults('section', 'featured');
+Route::get('buyer/stores/featured', [BuyerHomeController::class, 'getFeaturedStores']);
 Route::get('buyer/products/{id}', [BuyerController::class, 'product']);
 Route::get('buyer/stores', [BuyerController::class, 'stores']);
 Route::get('buyer/stores/{id}', [BuyerController::class, 'store']);
@@ -215,6 +222,23 @@ Route::middleware('auth:sanctum')->prefix('buyer')->group(function () {
     Route::put('reviews/{id}', [BuyerController::class, 'updateReview']);
     Route::post('stores/{id}/reviews', [BuyerController::class, 'addStoreReview']);
     Route::post('stores/{id}/follow', [BuyerController::class, 'toggleFollow']);
+    // Backward-compatible buyer notification aliases.
+    Route::get('notifications', [AppNotificationController::class, 'index']);
+    Route::post('notifications/{id}/read', [AppNotificationController::class, 'markRead']);
+    Route::post('notifications/read-all', [AppNotificationController::class, 'markAllRead']);
+    Route::get('notification-settings', [AppNotificationController::class, 'preferences']);
+    Route::put('notification-settings', [AppNotificationController::class, 'updatePreferences']);
+});
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('notifications', [AppNotificationController::class, 'index']);
+    Route::post('notifications/{id}/read', [AppNotificationController::class, 'markRead']);
+    Route::post('notifications/read-all', [AppNotificationController::class, 'markAllRead']);
+    Route::get('notification-preferences', [AppNotificationController::class, 'preferences']);
+    Route::put('notification-preferences', [AppNotificationController::class, 'updatePreferences']);
+    Route::post('notification-devices', [AppNotificationController::class, 'registerDevice']);
+    Route::delete('notification-devices', [AppNotificationController::class, 'unregisterDevice']);
+    Route::post('chat/notifications', [ChatNotificationController::class, 'store']);
 });
 
 // تأكد من وضع هذه المسارات داخل الـ Middleware الخاص بـ sanctum لتحديد هوية التاجر عبر auth()->id()
@@ -294,10 +318,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // 📌 Routes للمستخدمين المسجلين (تتبع المشاهدات والنقرات)
     // ============================================================
-    Route::middleware('auth:sanctum')->group(function () {
-        Route::post('ads/{adId}/view', [AdController::class, 'trackView']);
-        Route::get('ads/{adId}/click', [AdController::class, 'trackClick']);
-    });
+    Route::post('ads/{adId}/view', [AdController::class, 'trackView']);
+    Route::get('ads/{adId}/click', [AdController::class, 'trackClick']);
 
     // 📌 Routes للتاجر (Vendor / Wholesale)
     // ============================================================

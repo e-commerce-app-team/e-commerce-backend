@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\PlatformSetting;
 use App\Models\SubOrder;
 use App\Services\EscrowReleaseService;
+use App\Services\NotificationService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -51,6 +52,16 @@ class AutoReleaseEscrow extends Command
                                 'delivered_at' => $allDelivered ? now() : null,
                                 'status_timeline' => $timeline,
                             ]);
+                            $notifications = app(NotificationService::class);
+                            $notifications->notify($order->load('buyer')->buyer, 'merchant_payment_released',
+                                'notification_payment_released_title', 'notification_auto_release_message',
+                                ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'order'], NotificationService::CATEGORY_ORDERS, true);
+                            $candidate->load('seller');
+                            if ($candidate->seller) {
+                                $notifications->notify($candidate->seller, 'merchant_payment_released',
+                                    'notification_payment_released_title', 'notification_payment_released_message',
+                                    ['order_id' => (string) $order->id], ['order_id' => (string) $order->id, 'route' => 'wallet'], NotificationService::CATEGORY_ORDERS, true);
+                            }
                         });
                     } catch (\Throwable $exception) {
                         report($exception);

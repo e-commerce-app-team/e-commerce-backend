@@ -297,11 +297,22 @@ class CartController extends Controller
                         if (! $coupon) {
                             throw ValidationException::withMessages(['coupon' => 'The coupon does not belong to this store.']);
                         }
-                        $validation = $coupon->isValid($buyer->id, $subtotal, $productIdsForCoupon);
+                        $eligibleRows = $coupon->apply_to_all_products
+                            ? $rows
+                            : $rows->filter(fn ($row) => in_array(
+                                (int) $row['product']->id,
+                                array_map('intval', $coupon->product_ids ?? []),
+                                true,
+                            ));
+                        $eligibleSubtotal = round(
+                            $eligibleRows->sum(fn ($row) => $row['quote']['line_total']),
+                            2,
+                        );
+                        $validation = $coupon->isValid($buyer->id, $eligibleSubtotal, $productIdsForCoupon);
                         if (! $validation['valid']) {
                             throw ValidationException::withMessages(['coupon' => $validation['message']]);
                         }
-                        $discount = round($coupon->calculateDiscount($subtotal), 2);
+                        $discount = round($coupon->calculateDiscount($eligibleSubtotal), 2);
                         $couponIdsUsed[] = $coupon->id;
                     }
 

@@ -8,6 +8,7 @@ use App\Http\Requests\VendorRegisterRequest;
 use App\Http\Requests\WholesaleRegisterRequest;
 use App\Models\Ad;
 use App\Models\Coupon;
+use App\Models\Product;
 use App\Models\User;
 use App\Services\OtpService;
 use App\Services\WalletService;
@@ -152,9 +153,15 @@ class UserController extends Controller
             'device'    => 'nullable|string|max:50',
         ]);
 
-        $request->user()->update([
-            'fcm_token' => $request->fcm_token,
-        ]);
+        \App\Models\NotificationDevice::updateOrCreate(
+            ['token' => $request->fcm_token],
+            [
+                'user_id' => $request->user()->id,
+                'platform' => $request->device,
+                'locale' => $request->input('locale', 'en'),
+                'last_seen_at' => now(),
+            ],
+        );
 
         return response()->json([
             'success' => true,
@@ -521,6 +528,7 @@ class UserController extends Controller
         }
 
         $request->validate([
+            'code' => 'required|string|max:80|alpha_num',
             'title' => 'nullable|string|max:255',
             'description' => 'nullable|string',
             'type' => 'required|in:percentage,fixed,free_shipping',
@@ -534,8 +542,13 @@ class UserController extends Controller
             'product_ids' => 'nullable|array|exists:products,id'
         ]);
 
-        // توليد كود فريد
-        $code = $this->generateUniqueCode();
+        $code = strtoupper(trim($request->code));
+        if (Coupon::where('code', $code)->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This coupon code is already in use.',
+            ], 422);
+        }
 
         $coupon = Coupon::create([
             'seller_id' => $user->id,
@@ -602,6 +615,7 @@ class UserController extends Controller
             ->firstOrFail();
 
         $request->validate([
+            'code' => 'sometimes|required|string|max:80|alpha_num',
             'title' => 'nullable|string|max:255',
             'description' => 'nullable|string',
             'type' => 'sometimes|in:percentage,fixed,free_shipping',
@@ -615,7 +629,20 @@ class UserController extends Controller
             'product_ids' => 'nullable|array|exists:products,id'
         ]);
 
-        $coupon->update($request->all());
+        $updates = $request->all();
+        if (array_key_exists('code', $updates)) {
+            $updates['code'] = strtoupper(trim($updates['code']));
+            $exists = Coupon::where('code', $updates['code'])
+                ->where('id', '!=', $coupon->id)
+                ->exists();
+            if ($exists) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This coupon code is already in use.',
+                ], 422);
+            }
+        }
+        $coupon->update($updates);
 
         return response()->json([
             'success' => true,
@@ -953,11 +980,37 @@ class UserController extends Controller
         $request->validate([
             'type' => 'required|in:banner,promoted_product,featured_store,paid_notification',
             'title' => 'required|string|max:255',
+            'title_ar' => 'nullable|string|max:255',
+            'title_en' => 'nullable|string|max:255',
             'description' => 'nullable|string|max:500',
+            'description_ar' => 'nullable|string|max:500',
+            'description_en' => 'nullable|string|max:500',
             'image' => 'nullable|image|max:2048',
             'link' => 'nullable|string',
+            'product_id' => 'nullable|integer|exists:products,id',
             'duration' => 'required|in:1_day,3_days,1_week,1_month',
         ]);
+
+        if ($request->type === 'promoted_product' && ! $request->filled('product_id')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'A product is required for a promoted product ad.',
+            ], 422);
+        }
+
+        $product = null;
+        if ($request->filled('product_id')) {
+            $product = Product::whereKey($request->integer('product_id'))
+                ->where('user_id', $user->id)
+                ->where('status', 'active')
+                ->first();
+            if (! $product) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The selected product is not owned by this seller or is not active.',
+                ], 422);
+            }
+        }
 
         // حساب السعر حسب المدة
         $prices = [
@@ -969,46 +1022,43 @@ class UserController extends Controller
 
         $price = $prices[$request->duration];
 
-        // التحقق من رصيد المحفظة
-        if ($user->balance < $price) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Insufficient wallet balance.'
-            ], 402); // 402 Payment Required
-        }
-
-        // حساب تواريخ البداية والنهاية
-        $startsAt = now();
-        $expiresAt = $this->calculateExpiryDate($request->duration);
-
         // رفع الصورة
         $imagePath = null;
         if ($request->hasFile('image')) {
             $imagePath = $request->file('image')->store('ads/images', 'public');
         }
 
-        $ad = Ad::create([
-            'seller_id' => $user->id,
-            'type' => $request->type,
-            'title' => $request->title,
-            'description' => $request->description,
-            'image_url' => $imagePath,
-            'link' => $request->link,
-            'duration' => $request->duration,
-            'price' => $price,
-            'starts_at' => $startsAt,
-            'expires_at' => $expiresAt,
-            'status' => 'pending', // يبدأ قيد المراجعة
-        ]);
-
-        // ✅ بدلاً من السطرين السابقين
-        DB::transaction(function () use ($user, $price, $ad) {
-            $lockedUser = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
-            app(WalletService::class)->debitAvailable($lockedUser, (float) $price, [
-                'type' => 'payment',
-                'reference' => "ad:{$ad->id}:payment",
-                'description' => "Payment for advertising request #{$ad->id}",
+        $ad = DB::transaction(function () use ($user, $price, $request, $imagePath, $product) {
+            $ad = Ad::create([
+                'seller_id' => $user->id,
+                'product_id' => $product?->id,
+                'type' => $request->type,
+                'title' => $request->title,
+                'title_ar' => $request->input('title_ar', $request->title),
+                'title_en' => $request->input('title_en', $request->title),
+                'description' => $request->description,
+                'description_ar' => $request->input('description_ar', $request->description),
+                'description_en' => $request->input('description_en', $request->description),
+                'image_url' => $imagePath,
+                'link' => $request->link ?: ($product ? "app://product/{$product->id}" : null),
+                'duration' => $request->duration,
+                'price' => $price,
+                'starts_at' => null,
+                'expires_at' => null,
+                'status' => 'pending', // يبدأ قيد المراجعة
             ]);
+
+            DB::transaction(function () use ($user, $price, $ad) {
+                $lockedUser = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+                app(WalletService::class)->debitAvailable($lockedUser, (float) $price, [
+                    'type' => 'payment',
+                    'reference' => "ad:{$ad->id}:payment",
+                    'description' => "Payment for advertising request #{$ad->id}",
+                    'ad_id' => $ad->id,
+                ]);
+            });
+
+            return $ad;
         });
 
         return response()->json([
@@ -1018,8 +1068,8 @@ class UserController extends Controller
             'price_details' => [
                 'duration' => $ad->getDurationLabel(),
                 'price' => $price,
-                'starts_at' => $startsAt,
-                'expires_at' => $expiresAt,
+                'starts_at' => null,
+                'expires_at' => null,
             ]
         ], 201);
     }
